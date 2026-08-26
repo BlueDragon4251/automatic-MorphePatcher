@@ -1,0 +1,334 @@
+name: Automatic Morphe TikTok Patcher
+
+on:
+  schedule:
+    - cron: "37 * * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Build/notify even if the tracked TikTok state is unchanged"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: automatic-morphe-tiktok
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force || 'false' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install resolver dependencies
+        run: pip install -r requirements.txt
+
+      - name: Resolve latest stable TikTok patches
+        id: resolve
+        run: python scripts/resolve_tiktok.py
+
+      - name: Determine Original TikTok release channel
+        id: original
+        run: |
+          python scripts/apkmirror_tiktok.py \
+            --version "${{ steps.resolve.outputs.tiktok_version }}" \
+            --metadata build/tiktok-original.json \
+            --status-only
+
+      - name: Plan this run
+        id: plan
+        run: python scripts/plan_tiktok.py
+
+      - name: Nothing changed
+        if: steps.plan.outputs.changed != 'true'
+        run: echo "No stable TikTok patch release or supported TikTok target change detected."
+
+      - name: Validate required secrets
+        if: steps.plan.outputs.changed == 'true'
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
+          MORPHE_KEYSTORE_B64: ${{ secrets.MORPHE_KEYSTORE_B64 }}
+          MORPHE_KEYSTORE_PASSWORD: ${{ secrets.MORPHE_KEYSTORE_PASSWORD }}
+          MORPHE_KEY_ALIAS: ${{ secrets.MORPHE_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          test -n "$DISCORD_BOT_TOKEN" || { echo "Missing secret: DISCORD_BOT_TOKEN"; exit 1; }
+          test -n "$DISCORD_CHANNEL_ID" || { echo "Missing secret: DISCORD_CHANNEL_ID"; exit 1; }
+          if [ "${{ steps.plan.outputs.needs_build }}" = "true" ]; then
+            test -n "$MORPHE_KEYSTORE_B64" || { echo "Missing secret: MORPHE_KEYSTORE_B64"; exit 1; }
+            test -n "$MORPHE_KEYSTORE_PASSWORD" || { echo "Missing secret: MORPHE_KEYSTORE_PASSWORD"; exit 1; }
+            test -n "$MORPHE_KEY_ALIAS" || { echo "Missing secret: MORPHE_KEY_ALIAS"; exit 1; }
+          fi
+
+      - name: Set up Java 21
+        if: steps.plan.outputs.needs_build == 'true'
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        if: steps.plan.outputs.needs_build == 'true'
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android build tools
+        if: steps.plan.outputs.needs_build == 'true'
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "build-tools;35.0.0" >/dev/null
+          echo "$ANDROID_HOME/build-tools/35.0.0" >> "$GITHUB_PATH"
+
+      - name: Download exact stable patch bundle and Morphe Desktop
+        if: steps.plan.outputs.needs_build == 'true'
+        run: |
+          mkdir -p build dist
+          curl --fail --location --retry 3 \
+            "${{ steps.resolve.outputs.mpp_url }}" \
+            --output build/tiktok-patches.mpp
+          curl --fail --location --retry 3 \
+            "${{ steps.resolve.outputs.desktop_jar_url }}" \
+            --output build/morphe-desktop.jar
+
+      - name: Download exact Original TikTok APK
+        if: steps.plan.outputs.needs_build == 'true'
+        run: |
+          python scripts/apkmirror_tiktok.py \
+            --version "${{ steps.resolve.outputs.tiktok_version }}" \
+            --metadata build/tiktok-original.json \
+            --out build/tiktok-original.apk
+
+      - name: Verify Original TikTok APK
+        if: steps.plan.outputs.needs_build == 'true'
+        run: |
+          set -euo pipefail
+          apksigner verify --verbose --print-certs build/tiktok-original.apk
+          APKANALYZER="$(command -v apkanalyzer || true)"
+          if [ -z "$APKANALYZER" ]; then
+            APKANALYZER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name apkanalyzer | head -1)"
+          fi
+          test -x "$APKANALYZER" || { echo "apkanalyzer not found"; exit 1; }
+          ACTUAL_PACKAGE="$($APKANALYZER manifest application-id build/tiktok-original.apk)"
+          ACTUAL_VERSION="$($APKANALYZER manifest version-name build/tiktok-original.apk)"
+          test "$ACTUAL_PACKAGE" = "com.zhiliaoapp.musically" || {
+            echo "Unexpected TikTok package: $ACTUAL_PACKAGE"; exit 1;
+          }
+          test "$ACTUAL_VERSION" = "${{ steps.resolve.outputs.tiktok_version }}" || {
+            echo "Unexpected TikTok version: $ACTUAL_VERSION"; exit 1;
+          }
+
+      - name: Restore signing key
+        if: steps.plan.outputs.needs_build == 'true'
+        env:
+          MORPHE_KEYSTORE_B64: ${{ secrets.MORPHE_KEYSTORE_B64 }}
+        run: |
+          printf '%s' "$MORPHE_KEYSTORE_B64" | base64 --decode > build/morphe-signing.keystore
+          test -s build/morphe-signing.keystore
+
+      - name: Select every available TikTok patch
+        if: steps.plan.outputs.needs_build == 'true'
+        id: full
+        run: |
+          set -euo pipefail
+          java -jar build/morphe-desktop.jar options-create \
+            --patches build/tiktok-patches.mpp \
+            --out build/tiktok-full-patch-options.json \
+            --filter-package-name com.zhiliaoapp.musically
+          python scripts/enable_full_patch.py build/tiktok-full-patch-options.json
+
+      - name: Full Morphe TikTok patch
+        if: steps.plan.outputs.needs_build == 'true'
+        env:
+          MORPHE_KEYSTORE_PASSWORD: ${{ secrets.MORPHE_KEYSTORE_PASSWORD }}
+          MORPHE_KEY_ALIAS: ${{ secrets.MORPHE_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          OUT="dist/${{ steps.resolve.outputs.asset_name }}"
+          java -jar build/morphe-desktop.jar patch \
+            --patches build/tiktok-patches.mpp \
+            --options-file build/tiktok-full-patch-options.json \
+            --keystore build/morphe-signing.keystore \
+            --keystore-password "$MORPHE_KEYSTORE_PASSWORD" \
+            --keystore-entry-alias "$MORPHE_KEY_ALIAS" \
+            --keystore-entry-password "$MORPHE_KEYSTORE_PASSWORD" \
+            --verify-with-sdk \
+            --result-file build/tiktok-patch-result.json \
+            --out "$OUT" \
+            build/tiktok-original.apk
+
+          test -s "$OUT"
+          apksigner verify --verbose --print-certs "$OUT"
+          sha256sum "$OUT" | tee build/tiktok-patched.sha256
+
+      - name: Create TikTok build manifest and release notes
+        if: steps.plan.outputs.needs_build == 'true'
+        env:
+          FULL_PATCH_COUNT: ${{ steps.full.outputs.full_patch_total }}
+        run: |
+          set -euo pipefail
+          APK="dist/${{ steps.resolve.outputs.asset_name }}"
+          export APK_SHA="$(sha256sum "$APK" | awk '{print $1}')"
+          export APK_ASSET="${{ steps.resolve.outputs.asset_name }}"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          resolved = json.loads(Path('build/tiktok-resolved.json').read_text(encoding='utf-8'))
+          original = json.loads(Path('build/tiktok-original.json').read_text(encoding='utf-8'))
+          features = resolved['features']
+          patch_count = int(os.environ.get('FULL_PATCH_COUNT') or len(features))
+          sha = os.environ['APK_SHA']
+          asset = os.environ['APK_ASSET']
+
+          info = {
+              'tiktokVersion': resolved['tiktok_version'],
+              'patchesVersion': resolved['patch_version'],
+              'patchRelease': resolved['patch_tag'],
+              'patchReleaseChannel': 'stable',
+              'originalChannel': original['channel'],
+              'fullPatchCount': patch_count,
+              'features': features,
+              'asset': asset,
+              'sha256': sha,
+          }
+          Path('build/tiktok-build-info.json').write_text(
+              json.dumps(info, indent=2, ensure_ascii=False) + '\n', encoding='utf-8'
+          )
+
+          lines = [
+              f"**TikTok Version:** {resolved['tiktok_version']} (supported target)",
+              "",
+              f"**Patches Version:** {resolved['patch_version']} (latest stable)",
+              "",
+              f"**Full Patch:** {patch_count}/{patch_count} Patches aktiviert",
+              "",
+              "## Features",
+              "",
+          ]
+          for feature in features:
+              line = f"- **{feature['name']}**"
+              if feature.get('description'):
+                  line += f" — {feature['description']}"
+              lines.append(line)
+          lines += ["", f"SHA-256: `{sha}`", ""]
+          Path('build/tiktok-release-notes.md').write_text('\n'.join(lines), encoding='utf-8')
+          PY
+
+      - name: Publish or repair TikTok GitHub Release
+        if: steps.plan.outputs.needs_build == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.resolve.outputs.release_tag }}"
+          APK="dist/${{ steps.resolve.outputs.asset_name }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" build/tiktok-build-info.json --clobber
+            gh release edit "$TAG" \
+              --title "TikTok ${{ steps.resolve.outputs.tiktok_version }} • Morphe ${{ steps.resolve.outputs.patch_version }}" \
+              --notes-file build/tiktok-release-notes.md
+          else
+            gh release create "$TAG" "$APK" build/tiktok-build-info.json \
+              --title "TikTok ${{ steps.resolve.outputs.tiktok_version }} • Morphe ${{ steps.resolve.outputs.patch_version }}" \
+              --notes-file build/tiktok-release-notes.md
+          fi
+
+      - name: Get published TikTok APK SHA-256
+        if: steps.plan.outputs.changed == 'true'
+        id: published
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.resolve.outputs.release_tag }}"
+          ASSET="${{ steps.resolve.outputs.asset_name }}"
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${ASSET}"
+          echo "download_url=$URL" >> "$GITHUB_OUTPUT"
+
+          if [ -f "dist/$ASSET" ]; then
+            SHA="$(sha256sum "dist/$ASSET" | awk '{print $1}')"
+          else
+            rm -rf build/tiktok-release-asset
+            mkdir -p build/tiktok-release-asset
+            gh release download "$TAG" --pattern "$ASSET" --dir build/tiktok-release-asset
+            SHA="$(sha256sum "build/tiktok-release-asset/$ASSET" | awk '{print $1}')"
+          fi
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Send TikTok Discord bot embed
+        if: steps.plan.outputs.needs_notify == 'true'
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
+          PATCH_COUNT: ${{ steps.full.outputs.full_patch_total || steps.resolve.outputs.feature_count }}
+        run: |
+          python scripts/discord_notify_tiktok.py \
+            --token "$DISCORD_BOT_TOKEN" \
+            --channel "$DISCORD_CHANNEL_ID" \
+            --tiktok-version "${{ steps.resolve.outputs.tiktok_version }}" \
+            --patch-version "${{ steps.resolve.outputs.patch_version }}" \
+            --patch-count "$PATCH_COUNT" \
+            --features-json build/tiktok-features.json \
+            --download-url "${{ steps.published.outputs.download_url }}" \
+            --sha256 "${{ steps.published.outputs.sha256 }}"
+
+      - name: Record successfully published TikTok state
+        if: steps.plan.outputs.needs_notify == 'true'
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git rebase origin/main
+
+          python - <<'PY'
+          import json
+          from datetime import datetime, timezone
+          from pathlib import Path
+          resolved = json.loads(Path('build/tiktok-resolved.json').read_text(encoding='utf-8'))
+          original = json.loads(Path('build/tiktok-original.json').read_text(encoding='utf-8'))
+          state = {
+              'tiktok_version': resolved['tiktok_version'],
+              'patch_version': resolved['patch_version'],
+              'patch_tag': resolved['patch_tag'],
+              'original_channel': original['channel'],
+              'published_at': datetime.now(timezone.utc).isoformat(),
+              'release_tag': resolved['release_tag'],
+          }
+          Path('state-tiktok.json').write_text(json.dumps(state, indent=2) + '\n', encoding='utf-8')
+          PY
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state-tiktok.json
+          if git diff --cached --quiet; then
+            echo "TikTok state already current."
+          else
+            git commit -m "chore: record published TikTok Morphe build"
+            for attempt in 1 2 3; do
+              if git push origin HEAD:main; then
+                exit 0
+              fi
+              echo "TikTok state push raced with another update; retrying ($attempt/3)..."
+              git fetch origin main
+              git rebase origin/main
+            done
+            echo "Failed to publish TikTok state after 3 attempts."
+            exit 1
+          fi
