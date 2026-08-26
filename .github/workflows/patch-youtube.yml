@@ -143,6 +143,16 @@ jobs:
           printf '%s' "$MORPHE_KEYSTORE_B64" | base64 --decode > build/morphe-signing.keystore
           test -s build/morphe-signing.keystore
 
+      - name: Select every available YouTube patch
+        if: steps.plan.outputs.needs_build == 'true'
+        run: |
+          set -euo pipefail
+          java -jar build/morphe-desktop.jar options-create \
+            --patches build/patches.mpp \
+            --out build/full-patch-options.json \
+            --filter-package-name com.google.android.youtube
+          python scripts/enable_full_patch.py build/full-patch-options.json
+
       - name: Full Morphe patch
         if: steps.plan.outputs.needs_build == 'true'
         env:
@@ -153,6 +163,7 @@ jobs:
           OUT="dist/${{ steps.resolve.outputs.asset_name }}"
           java -jar build/morphe-desktop.jar patch \
             --patches build/patches.mpp \
+            --options-file build/full-patch-options.json \
             --keystore build/morphe-signing.keystore \
             --keystore-password "$MORPHE_KEYSTORE_PASSWORD" \
             --keystore-entry-alias "$MORPHE_KEY_ALIAS" \
