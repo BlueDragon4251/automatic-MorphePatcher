@@ -1,0 +1,286 @@
+name: Automatic Morphe YouTube Patcher
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Build/notify even if the tracked state is unchanged"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: automatic-morphe-youtube
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force || 'false' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install resolver dependencies
+        run: pip install -r requirements.txt
+
+      - name: Resolve latest Morphe dev and YouTube target
+        id: resolve
+        run: python scripts/resolve.py
+
+      - name: Determine Original YouTube release channel
+        id: original
+        run: |
+          python scripts/apkmirror.py \
+            --version "${{ steps.resolve.outputs.youtube_version }}" \
+            --metadata build/original.json \
+            --status-only
+
+      - name: Plan this run
+        id: plan
+        run: python scripts/plan.py
+
+      - name: Nothing changed
+        if: steps.plan.outputs.changed != 'true'
+        run: echo "No Morphe patch, supported YouTube version, or Original release-channel change detected."
+
+      - name: Validate required secrets
+        if: steps.plan.outputs.changed == 'true'
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
+          MORPHE_KEYSTORE_B64: ${{ secrets.MORPHE_KEYSTORE_B64 }}
+          MORPHE_KEYSTORE_PASSWORD: ${{ secrets.MORPHE_KEYSTORE_PASSWORD }}
+          MORPHE_KEY_ALIAS: ${{ secrets.MORPHE_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          test -n "$DISCORD_BOT_TOKEN" || { echo "Missing secret: DISCORD_BOT_TOKEN"; exit 1; }
+          test -n "$DISCORD_CHANNEL_ID" || { echo "Missing secret: DISCORD_CHANNEL_ID"; exit 1; }
+          if [ "${{ steps.plan.outputs.needs_build }}" = "true" ]; then
+            test -n "$MORPHE_KEYSTORE_B64" || { echo "Missing secret: MORPHE_KEYSTORE_B64"; exit 1; }
+            test -n "$MORPHE_KEYSTORE_PASSWORD" || { echo "Missing secret: MORPHE_KEYSTORE_PASSWORD"; exit 1; }
+            test -n "$MORPHE_KEY_ALIAS" || { echo "Missing secret: MORPHE_KEY_ALIAS"; exit 1; }
+          fi
+
+      - name: Set up Java 21
+        if: steps.plan.outputs.needs_build == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        if: steps.plan.outputs.needs_build == 'true'
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android build tools
+        if: steps.plan.outputs.needs_build == 'true'
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "build-tools;35.0.0" >/dev/null
+          echo "$ANDROID_HOME/build-tools/35.0.0" >> "$GITHUB_PATH"
+
+      - name: Download exact Morphe assets
+        if: steps.plan.outputs.needs_build == 'true'
+        run: |
+          mkdir -p build dist
+          curl --fail --location --retry 3 \
+            "${{ steps.resolve.outputs.mpp_url }}" \
+            --output build/patches.mpp
+          curl --fail --location --retry 3 \
+            "${{ steps.resolve.outputs.desktop_jar_url }}" \
+            --output build/morphe-desktop.jar
+
+      - name: Download exact Original YouTube APK
+        if: steps.plan.outputs.needs_build == 'true'
+        id: stock
+        run: |
+          python scripts/apkmirror.py \
+            --version "${{ steps.resolve.outputs.youtube_version }}" \
+            --metadata build/original.json \
+            --out build/youtube-original.apk
+
+      - name: Verify Original APK
+        if: steps.plan.outputs.needs_build == 'true'
+        run: |
+          set -euo pipefail
+          apksigner verify --verbose --print-certs build/youtube-original.apk
+          APKANALYZER="$(command -v apkanalyzer || true)"
+          if [ -z "$APKANALYZER" ]; then
+            APKANALYZER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name apkanalyzer | head -1)"
+          fi
+          test -x "$APKANALYZER" || { echo "apkanalyzer not found"; exit 1; }
+          ACTUAL_PACKAGE="$($APKANALYZER manifest application-id build/youtube-original.apk)"
+          ACTUAL_VERSION="$($APKANALYZER manifest version-name build/youtube-original.apk)"
+          test "$ACTUAL_PACKAGE" = "com.google.android.youtube" || {
+            echo "Unexpected package: $ACTUAL_PACKAGE"; exit 1;
+          }
+          test "$ACTUAL_VERSION" = "${{ steps.resolve.outputs.youtube_version }}" || {
+            echo "Unexpected version: $ACTUAL_VERSION"; exit 1;
+          }
+
+      - name: Restore signing key
+        if: steps.plan.outputs.needs_build == 'true'
+        env:
+          MORPHE_KEYSTORE_B64: ${{ secrets.MORPHE_KEYSTORE_B64 }}
+        run: |
+          printf '%s' "$MORPHE_KEYSTORE_B64" | base64 --decode > build/morphe-signing.keystore
+          test -s build/morphe-signing.keystore
+
+      - name: Full Morphe patch
+        if: steps.plan.outputs.needs_build == 'true'
+        env:
+          MORPHE_KEYSTORE_PASSWORD: ${{ secrets.MORPHE_KEYSTORE_PASSWORD }}
+          MORPHE_KEY_ALIAS: ${{ secrets.MORPHE_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          OUT="dist/${{ steps.resolve.outputs.asset_name }}"
+          java -jar build/morphe-desktop.jar patch \
+            --patches build/patches.mpp \
+            --keystore build/morphe-signing.keystore \
+            --keystore-password "$MORPHE_KEYSTORE_PASSWORD" \
+            --keystore-entry-alias "$MORPHE_KEY_ALIAS" \
+            --keystore-entry-password "$MORPHE_KEYSTORE_PASSWORD" \
+            --verify-with-sdk \
+            --result-file build/patch-result.json \
+            --out "$OUT" \
+            build/youtube-original.apk
+
+          test -s "$OUT"
+          apksigner verify --verbose --print-certs "$OUT"
+          sha256sum "$OUT" | tee build/patched.sha256
+
+      - name: Create build manifest and release notes
+        if: steps.plan.outputs.needs_build == 'true'
+        run: |
+          set -euo pipefail
+          APK="dist/${{ steps.resolve.outputs.asset_name }}"
+          SHA="$(sha256sum "$APK" | awk '{print $1}')"
+          jq -n \
+            --slurpfile resolved build/resolved.json \
+            --slurpfile original build/original.json \
+            --arg sha256 "$SHA" \
+            --arg asset "${{ steps.resolve.outputs.asset_name }}" \
+            '{
+              youtubeVersion: $resolved[0].youtube_version,
+              patchesVersion: $resolved[0].patch_version,
+              morpheTargetChannel: $resolved[0].morphe_target_channel,
+              originalChannel: $original[0].channel,
+              originalLabel: $original[0].display_label,
+              originalLatestStableSeen: $original[0].latest_stable_seen,
+              originalLatestPrereleaseSeen: $original[0].latest_prerelease_seen,
+              asset: $asset,
+              sha256: $sha256
+            }' > build/build-info.json
+
+          cat > build/release-notes.md <<EOF
+          **Youtube Version:** ${{ steps.resolve.outputs.youtube_version }} (latest release (Morphe) & ${{ steps.original.outputs.original_label }})
+
+          **Patches Version:** ${{ steps.resolve.outputs.patch_version }} (latest dev)
+
+          **ACHTUNG!** : Bitte überprüfe, dass deine originale YouTube app auf dem neuesten Stand ist, sonst könnte es zu abstürzen bzw Wiedergabe Fehler kommen.
+
+          SHA-256: \`$SHA\`
+          EOF
+
+      - name: Publish or repair GitHub Release
+        if: steps.plan.outputs.needs_build == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.resolve.outputs.release_tag }}"
+          APK="dist/${{ steps.resolve.outputs.asset_name }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" build/build-info.json --clobber
+            gh release edit "$TAG" \
+              --title "YouTube ${{ steps.resolve.outputs.youtube_version }} • Morphe ${{ steps.resolve.outputs.patch_version }}" \
+              --notes-file build/release-notes.md
+          else
+            gh release create "$TAG" "$APK" build/build-info.json \
+              --title "YouTube ${{ steps.resolve.outputs.youtube_version }} • Morphe ${{ steps.resolve.outputs.patch_version }}" \
+              --notes-file build/release-notes.md
+          fi
+
+      - name: Get published APK SHA-256
+        if: steps.plan.outputs.changed == 'true'
+        id: published
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.resolve.outputs.release_tag }}"
+          ASSET="${{ steps.resolve.outputs.asset_name }}"
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${ASSET}"
+          echo "download_url=$URL" >> "$GITHUB_OUTPUT"
+
+          if [ -f "dist/$ASSET" ]; then
+            SHA="$(sha256sum "dist/$ASSET" | awk '{print $1}')"
+          else
+            rm -rf build/release-asset
+            mkdir -p build/release-asset
+            gh release download "$TAG" --pattern "$ASSET" --dir build/release-asset
+            SHA="$(sha256sum "build/release-asset/$ASSET" | awk '{print $1}')"
+          fi
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Send Discord bot embed
+        if: steps.plan.outputs.needs_notify == 'true'
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
+        run: |
+          python scripts/discord_notify.py \
+            --token "$DISCORD_BOT_TOKEN" \
+            --channel "$DISCORD_CHANNEL_ID" \
+            --youtube-version "${{ steps.resolve.outputs.youtube_version }}" \
+            --patch-version "${{ steps.resolve.outputs.patch_version }}" \
+            --original-label "${{ steps.original.outputs.original_label }}" \
+            --download-url "${{ steps.published.outputs.download_url }}" \
+            --sha256 "${{ steps.published.outputs.sha256 }}"
+
+      - name: Record successfully published state
+        if: steps.plan.outputs.needs_notify == 'true'
+        run: |
+          python - <<'PY'
+          import json
+          from datetime import datetime, timezone
+          from pathlib import Path
+          resolved = json.loads(Path('build/resolved.json').read_text())
+          original = json.loads(Path('build/original.json').read_text())
+          state = {
+              'youtube_version': resolved['youtube_version'],
+              'patch_version': resolved['patch_version'],
+              'original_channel': original['channel'],
+              'original_label': original['display_label'],
+              'published_at': datetime.now(timezone.utc).isoformat(),
+              'release_tag': resolved['release_tag'],
+          }
+          Path('state.json').write_text(json.dumps(state, indent=2) + '\n')
+          PY
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state.json
+          if git diff --cached --quiet; then
+            echo "State already current."
+          else
+            git commit -m "chore: record published Morphe build"
+            git push
+          fi
