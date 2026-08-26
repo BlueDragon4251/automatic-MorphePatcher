@@ -1,35 +1,56 @@
 # automatic-MorphePatcher
 
-Automatically tracks the newest **Morphe patches dev pre-release**, resolves the newest YouTube version supported by that patch bundle, determines whether the original YouTube build is stable or a beta/alpha, patches the exact APK, publishes it as a GitHub Release, and posts a Discord bot embed with the external download link.
+Automatically builds and publishes full Morphe-patched APKs for **YouTube** and **TikTok**, stores them as GitHub Release assets, and posts Discord embeds with external download links.
 
-## Behaviour
+## YouTube
 
-- Checks every hour (`17 * * * *`) and can also be run manually.
-- Always selects the newest published **Morphe patches pre-release/dev**.
-- Selects the numerically newest YouTube version shown in that exact Morphe release's generated supported-version table, including experimental targets.
-- Determines the original app channel from APKMirror metadata (`stable`, `beta`, `alpha`).
-- Distinguishes `latest release (Original)`, `latest pre-release (Original)`, and older stable/pre-release targets.
-- A change in the Original release channel is tracked too. If a version later moves from beta to stable, Discord is updated without rebuilding an already-published identical APK.
-- Uses the exact `.mpp` asset from the resolved Morphe release, preventing a race where a newer dev release appears during the build.
-- Downloads a standalone universal/nodpi YouTube APK when APKMirror offers one.
-- Verifies package name, version name, and APK signatures before patching.
-- Runs Morphe without `--force`, `--exclusive`, or `--continue-on-error`: the exact supported version is required, all default-enabled compatible patches are applied, and a real patch failure stops the build.
-- Uses a persistent signing key supplied through GitHub Actions secrets so future patched APKs can update older builds signed by this project.
-- Publishes the APK to a GitHub Release and sends only the external URL to Discord.
+- Checks every hour at minute `17` and can also be run manually.
+- Tracks the newest published **Morphe patches dev/pre-release**.
+- Selects the numerically newest supported YouTube version from that exact patch release, including experimental targets.
+- Detects whether the exact original YouTube build is stable, beta, or alpha through APKMirror.
+- Downloads and verifies the exact original `com.google.android.youtube` APK before patching.
+- Generates a Morphe options file and enables **every available YouTube patch**, including patches that are disabled by default. This is a true full-patch build rather than only Morphe's default selection.
+- Uses the exact `.mpp` asset selected by the resolver so a newer upstream release appearing during a build cannot change the patch set mid-run.
+- Publishes a GitHub Release and sends a Discord embed containing version/channel information and the external APK download link.
+- Tracks the original release channel as state, so a beta-to-stable transition can trigger a new Discord notification even if the APK version itself is unchanged.
+
+Workflow: `.github/workflows/patch-youtube.yml`
+
+## TikTok
+
+TikTok uses the custom patch repository:
+
+`BlueDragon4251/tiktok-patches-for-morphe`
+
+- Checks every hour at minute `37` and can also be run manually.
+- Uses **normal/stable patch releases only**. GitHub drafts/pre-releases are rejected, and tag names containing `dev`, `alpha`, `beta`, `rc`, or `pre` are rejected as an additional guard.
+- Resolves the TikTok version supported by the exact stable patch release.
+- Downloads the exact original global TikTok APK and requires package `com.zhiliaoapp.musically` plus the exact target version before patching.
+- Generates a Morphe options file and enables **every available TikTok patch**, including default-disabled patches, for a true full-patch build.
+- Extracts the feature names and descriptions from the stable patch release metadata and includes the feature list in the GitHub Release and Discord embed automatically.
+- Signs every published build with the same persistent project key so later project builds can update earlier project builds.
+- After patching, verifies APK signatures, ZIP integrity, exact package/version, and parses every generated `classes*.dex` with Android `dexdump`.
+- TikTok intentionally does not use Morphe Desktop's optional `--verify-with-sdk` developer check because that check can produce false positives and D8 crashes internally on the supported TikTok APK even after all patches were successfully applied. The explicit post-build checks above are used instead.
+
+Workflow: `.github/workflows/patch-tiktok.yml`
+
+## Full-patch behaviour
+
+For both apps the workflow asks Morphe to create the complete filtered options catalog for the target package and then sets every discovered patch to `enabled: true`. The build log prints the exact `N/N` selection before patching. A real patch failure stops the build; patches are not silently skipped with `--continue-on-error`.
 
 ## Required GitHub Actions secrets
 
-Create these repository secrets before the first scheduled/manual build:
+Create these repository secrets before scheduled/manual builds:
 
 | Secret | Purpose |
 | --- | --- |
-| `DISCORD_BOT_TOKEN` | Discord bot token. The bot must be in the target server and have **View Channel**, **Send Messages**, and **Embed Links** permission. |
-| `DISCORD_CHANNEL_ID` | Numeric channel ID where the embed should be posted. |
-| `MORPHE_KEYSTORE_B64` | Base64-encoded signing keystore (`PKCS12`, `JKS`, or another format Morphe can import). |
-| `MORPHE_KEYSTORE_PASSWORD` | Keystore password and key-entry password. This workflow intentionally uses the same password for both. |
+| `DISCORD_BOT_TOKEN` | Discord bot token. The bot must have **View Channel**, **Send Messages**, and **Embed Links** permission in the target channel. |
+| `DISCORD_CHANNEL_ID` | Numeric Discord channel ID where release embeds are posted. |
+| `MORPHE_KEYSTORE_B64` | Base64-encoded persistent signing keystore. |
+| `MORPHE_KEYSTORE_PASSWORD` | Keystore password and key-entry password. |
 | `MORPHE_KEY_ALIAS` | Alias of the signing key inside the keystore. |
 
-`GITHUB_TOKEN` is provided automatically by GitHub Actions and is given `contents: write` permission by the workflow.
+`GITHUB_TOKEN` is provided automatically by GitHub Actions and receives `contents: write` permission from the workflows.
 
 ## Generate a signing key once
 
@@ -61,22 +82,14 @@ PowerShell:
 
 Do **not** commit the keystore or bot token.
 
-## Discord message
-
-The bot sends an embed in this form, with all versions/statuses filled dynamically:
-
-> **Youtube Version:** `21.34.243` (latest release (Morphe) & latest pre-release (Original))
->
-> **Patches Version:** `1.41.0-dev.1` (latest dev)
->
-> ⚠️ **ACHTUNG!** : Bitte überprüfe, dass deine originale YouTube app auf dem neuesten Stand ist, sonst könnte es zu abstürzen bzw Wiedergabe Fehler kommen.
->
-> **APK herunterladen**
-
 ## State and duplicate prevention
 
-`state.json` is updated only after the Discord message was sent successfully. That means a Discord outage does not permanently suppress the notification: the next scheduled run retries it. If the GitHub Release already exists, the workflow reuses the existing APK instead of patching it again.
+YouTube publication state is stored in `state.json`; TikTok publication state is stored separately in `state-tiktok.json`. State is written only after the Discord notification succeeds. Release assets can therefore be reused after a notification failure instead of rebuilding unnecessarily, while the next scheduled run can retry the missing notification.
 
-## Storage note
+Long builds also fetch/rebase the current `main` branch before committing state and retry a raced state push, so an unrelated repository update should not cause the final publication step to fail.
 
-The APK is not committed to Git. It is stored as a GitHub Release asset. Public distribution of modified proprietary APKs can attract copyright/DMCA complaints; if that becomes a problem, move the download asset to private storage and keep the same Discord-link flow.
+## Release storage
+
+APKs are not committed to Git. They are published as GitHub Release assets and Discord receives only the external download URL.
+
+Public distribution of modified proprietary APKs can attract copyright/DMCA complaints. If that becomes a problem, move the release assets to private/object storage while keeping the same Discord-link flow.
