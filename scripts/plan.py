@@ -65,7 +65,10 @@ def main():
             if e.code != 404:
                 raise
 
-    needs_build = changed and not asset_exists
+    # Normal scheduled runs only build when the desired asset does not exist.
+    # An explicit force run must rebuild even when the same release/tag is
+    # already published, so it can repair/replace a bad or incomplete APK.
+    needs_build = changed and (force or not asset_exists)
     needs_notify = changed
 
     output({
