@@ -258,6 +258,14 @@ jobs:
       - name: Record successfully published state
         if: steps.plan.outputs.needs_notify == 'true'
         run: |
+          set -euo pipefail
+
+          # The branch can move while a long APK build is running. Sync before
+          # writing state so a harmless concurrent repository change cannot make
+          # the final state push fail with a non-fast-forward error.
+          git fetch origin main
+          git rebase origin/main
+
           python - <<'PY'
           import json
           from datetime import datetime, timezone
@@ -282,5 +290,14 @@ jobs:
             echo "State already current."
           else
             git commit -m "chore: record published Morphe build"
-            git push
+            for attempt in 1 2 3; do
+              if git push origin HEAD:main; then
+                exit 0
+              fi
+              echo "State push raced with another update; retrying ($attempt/3)..."
+              git fetch origin main
+              git rebase origin/main
+            done
+            echo "Failed to publish state after 3 attempts."
+            exit 1
           fi
