@@ -36,7 +36,7 @@ def main():
             "url": args.download_url,
             "description": description,
             "fields": fields,
-            "footer": {"text": "automatic-MorphePatcher"},
+            "footer": {"text": "BlueIT-Patcher"},
         }]
     }
 
@@ -46,7 +46,7 @@ def main():
         headers={
             "Authorization": f"Bot {args.token}",
             "Content-Type": "application/json",
-            "User-Agent": "automatic-MorphePatcher/1.0",
+            "User-Agent": "BlueIT-Patcher/1.0",
         },
         method="POST",
     )
