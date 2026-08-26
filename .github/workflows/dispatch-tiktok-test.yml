@@ -15,9 +15,9 @@ jobs:
   dispatch:
     runs-on: ubuntu-latest
     steps:
-      - name: Dispatch TikTok full patch build
+      - name: Cancel duplicate pending TikTok build
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run patch-tiktok.yml --repo BlueDragon4251/automatic-MorphePatcher --ref main -f force=true
+        run: gh run cancel 32966960026 --repo BlueDragon4251/automatic-MorphePatcher
 
-# fresh dispatch from current main after TikTok D8 verifier workaround
+# one-shot cleanup: keep only the already-running verifier-fix production build
