@@ -46,16 +46,17 @@ def get_html(session, url: str, referer: str | None = None) -> str:
 
 def target_channel(release_html: str, version: str) -> str:
     soup = BeautifulSoup(release_html, "html.parser")
-    text = clean_text(soup)
-    pattern = re.compile(rf"YouTube\s+{re.escape(version)}(?:\s+|[^A-Za-z0-9])*(beta|alpha)", re.I)
-    m = pattern.search(text)
-    if m:
-        return m.group(1).lower()
     title = soup.title.get_text(" ", strip=True) if soup.title else ""
-    if re.search(r"\bbeta\b", title, re.I):
+    h1 = soup.find("h1")
+    heading = h1.get_text(" ", strip=True) if h1 else ""
+    exact_header = f"{title} {heading}"
+    if re.search(r"\bbeta\b", exact_header, re.I):
         return "beta"
-    if re.search(r"\balpha\b", title, re.I):
+    if re.search(r"\balpha\b", exact_header, re.I):
         return "alpha"
+    # The exact release page title/H1 is authoritative for this version.
+    # Avoid scanning the whole page because its All Releases section can
+    # mention prerelease builds of other versions.
     return "stable"
 
 
