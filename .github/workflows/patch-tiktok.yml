@@ -161,6 +161,9 @@ jobs:
         run: |
           set -euo pipefail
           OUT="dist/${{ steps.resolve.outputs.asset_name }}"
+          # Do not use --verify-with-sdk for TikTok. Morphe documents that check as
+          # developer-only and potentially false-positive; D8 9.2.4-dev crashes
+          # internally on TikTok 46.4.3 classes12.dex after all patches apply.
           java -jar build/morphe-desktop.jar patch \
             --patches build/tiktok-patches.mpp \
             --options-file build/tiktok-full-patch-options.json \
@@ -168,14 +171,56 @@ jobs:
             --keystore-password "$MORPHE_KEYSTORE_PASSWORD" \
             --keystore-entry-alias "$MORPHE_KEY_ALIAS" \
             --keystore-entry-password "$MORPHE_KEYSTORE_PASSWORD" \
-            --verify-with-sdk \
             --result-file build/tiktok-patch-result.json \
             --out "$OUT" \
             build/tiktok-original.apk
-
           test -s "$OUT"
-          apksigner verify --verbose --print-certs "$OUT"
-          sha256sum "$OUT" | tee build/tiktok-patched.sha256
+
+      - name: Verify patched TikTok APK
+        if: steps.plan.outputs.needs_build == 'true'
+        run: |
+          set -euo pipefail
+          APK="dist/${{ steps.resolve.outputs.asset_name }}"
+
+          # Cryptographic APK verification with the persistent signing key.
+          apksigner verify --verbose --print-certs "$APK"
+
+          # Whole-archive CRC/integrity check.
+          unzip -t "$APK" >/dev/null
+
+          # Manifest identity must remain the exact global TikTok target.
+          APKANALYZER="$(command -v apkanalyzer || true)"
+          if [ -z "$APKANALYZER" ]; then
+            APKANALYZER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name apkanalyzer | head -1)"
+          fi
+          test -x "$APKANALYZER" || { echo "apkanalyzer not found"; exit 1; }
+          ACTUAL_PACKAGE="$($APKANALYZER manifest application-id "$APK")"
+          ACTUAL_VERSION="$($APKANALYZER manifest version-name "$APK")"
+          test "$ACTUAL_PACKAGE" = "com.zhiliaoapp.musically" || {
+            echo "Unexpected patched TikTok package: $ACTUAL_PACKAGE"; exit 1;
+          }
+          test "$ACTUAL_VERSION" = "${{ steps.resolve.outputs.tiktok_version }}" || {
+            echo "Unexpected patched TikTok version: $ACTUAL_VERSION"; exit 1;
+          }
+
+          # Parse every DEX with Android's dexdump. This validates the generated
+          # DEX containers without re-compiling untouched TikTok DEX through D8.
+          DEXDUMP="$(command -v dexdump || true)"
+          test -x "$DEXDUMP" || { echo "dexdump not found"; exit 1; }
+          rm -rf build/tiktok-dex-verify
+          mkdir -p build/tiktok-dex-verify
+          DEX_COUNT=0
+          while IFS= read -r dex; do
+            DEX_COUNT=$((DEX_COUNT + 1))
+            out="build/tiktok-dex-verify/$(basename "$dex")"
+            unzip -p "$APK" "$dex" > "$out"
+            test -s "$out"
+            "$DEXDUMP" -f "$out" >/dev/null
+          done < <(unzip -Z1 "$APK" | grep -E '^classes([0-9]+)?\.dex$')
+          test "$DEX_COUNT" -gt 0 || { echo "No DEX files found in patched TikTok APK"; exit 1; }
+          echo "Patched TikTok verification passed: package=$ACTUAL_PACKAGE version=$ACTUAL_VERSION dex=$DEX_COUNT"
+
+          sha256sum "$APK" | tee build/tiktok-patched.sha256
 
       - name: Create TikTok build manifest and release notes
         if: steps.plan.outputs.needs_build == 'true'
