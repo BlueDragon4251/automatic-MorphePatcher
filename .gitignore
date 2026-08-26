@@ -1,0 +1,7 @@
+build/
+dist/
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.apk
