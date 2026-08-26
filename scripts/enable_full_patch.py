@@ -1,7 +1,17 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import os
 from pathlib import Path
+
+
+def write_github_output(total: int, forced_on: int) -> None:
+    out = os.getenv("GITHUB_OUTPUT")
+    if not out:
+        return
+    with open(out, "a", encoding="utf-8") as f:
+        f.write(f"full_patch_total={total}\n")
+        f.write(f"full_patch_forced_on={forced_on}\n")
 
 
 def main() -> int:
@@ -38,9 +48,10 @@ def main() -> int:
             config["enabled"] = True
 
     if total == 0:
-        raise SystemExit("No YouTube patches found in Morphe options file")
+        raise SystemExit("No patches found in Morphe options file")
 
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    write_github_output(total, forced_on)
 
     print(f"Full patch selection: {total}/{total} enabled ({forced_on} forced on)")
     print("Enabled patches:")
