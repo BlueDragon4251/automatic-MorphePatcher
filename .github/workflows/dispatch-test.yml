@@ -18,4 +18,4 @@ jobs:
       - name: Dispatch real Morphe workflow
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run patch-youtube.yml --ref main -f force=true
+        run: gh workflow run patch-youtube.yml -R "$GITHUB_REPOSITORY" --ref main -f force=true
