@@ -3,7 +3,54 @@ import argparse
 import json
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
+
+
+API_BASE = "https://discord.com/api/v10"
+USER_AGENT = "BlueIT-Patcher/1.0"
+
+
+def discord_request(token: str, method: str, url: str, payload=None):
+    data = None if payload is None else json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={
+            "Authorization": f"Bot {token}",
+            "Content-Type": "application/json",
+            "User-Agent": USER_AGENT,
+        },
+        method=method,
+    )
+    with urllib.request.urlopen(req, timeout=30) as r:
+        body = r.read().decode("utf-8")
+        if r.status < 200 or r.status >= 300:
+            raise RuntimeError(f"Discord returned HTTP {r.status}: {body}")
+        return json.loads(body) if body else None
+
+
+def find_existing_message(token: str, channel: str, download_url: str):
+    # A channel change (pre-release <-> release) keeps the same GitHub release
+    # tag and therefore the same download URL. Reuse that as the stable key for
+    # locating the already published Discord message. This also works for old
+    # messages created before we started tracking a Discord message id.
+    query = urllib.parse.urlencode({"limit": 100})
+    messages = discord_request(
+        token,
+        "GET",
+        f"{API_BASE}/channels/{channel}/messages?{query}",
+    )
+    for message in messages or []:
+        for embed in message.get("embeds", []):
+            if embed.get("title") != "YouTube • Morphe Patches":
+                continue
+            if embed.get("url") == download_url:
+                return message.get("id")
+            description = embed.get("description") or ""
+            if download_url in description:
+                return message.get("id")
+    return None
 
 
 def main():
@@ -40,22 +87,27 @@ def main():
         }]
     }
 
-    req = urllib.request.Request(
-        f"https://discord.com/api/v10/channels/{args.channel}/messages",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bot {args.token}",
-            "Content-Type": "application/json",
-            "User-Agent": "BlueIT-Patcher/1.0",
-        },
-        method="POST",
-    )
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            body = r.read().decode("utf-8")
-            if r.status not in (200, 201):
-                raise RuntimeError(f"Discord returned HTTP {r.status}: {body}")
-            response = json.loads(body)
+        message_id = find_existing_message(
+            args.token,
+            args.channel,
+            args.download_url,
+        )
+        if message_id:
+            response = discord_request(
+                args.token,
+                "PATCH",
+                f"{API_BASE}/channels/{args.channel}/messages/{message_id}",
+                payload,
+            )
+            print(f"Discord message edited: {response.get('id', message_id)}")
+        else:
+            response = discord_request(
+                args.token,
+                "POST",
+                f"{API_BASE}/channels/{args.channel}/messages",
+                payload,
+            )
             print(f"Discord message sent: {response.get('id', 'unknown id')}")
     except urllib.error.HTTPError as e:
         print(f"Discord HTTP {e.code}: {e.read().decode('utf-8', 'replace')}", file=sys.stderr)
