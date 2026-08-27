@@ -1,8 +1,8 @@
 {
   "youtube_version": "21.34.243",
   "patch_version": "1.41.0-dev.2",
-  "original_channel": "beta",
-  "original_label": "latest pre-release (Original)",
-  "published_at": "2026-08-27T09:55:50.180909+00:00",
+  "original_channel": "stable",
+  "original_label": "latest release (Original)",
+  "published_at": "2026-08-27T20:32:53.049508+00:00",
   "release_tag": "youtube-21.34.243-morphe-1.41.0-dev.2"
 }
