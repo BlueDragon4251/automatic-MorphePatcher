@@ -2,7 +2,7 @@ name: Automatic Morphe TikTok Patcher
 
 on:
   schedule:
-    - cron: "37 * * * *"
+    - cron: "41 * * * *"
   workflow_dispatch:
     inputs:
       force:
