@@ -56,6 +56,42 @@ jobs:
         id: plan
         run: python scripts/plan.py
 
+      - name: Sync existing GitHub Release channel metadata
+        if: steps.plan.outputs.asset_exists == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ORIGINAL_LABEL: ${{ steps.original.outputs.original_label }}
+          RELEASE_TAG: ${{ steps.resolve.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          gh release view "$RELEASE_TAG" --json body --jq .body > build/current-release-notes.md
+          cp build/current-release-notes.md build/synced-release-notes.md
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          path = Path("build/synced-release-notes.md")
+          text = path.read_text(encoding="utf-8")
+          desired = os.environ["ORIGINAL_LABEL"]
+          updated, count = re.subn(
+              r"latest (?:pre-)?release \(Original\)",
+              desired,
+              text,
+          )
+          if count == 0:
+              raise SystemExit("Could not find Original release-channel label in existing release notes")
+          path.write_text(updated, encoding="utf-8")
+          PY
+
+          if cmp -s build/current-release-notes.md build/synced-release-notes.md; then
+            echo "GitHub Release channel metadata already current."
+          else
+            gh release edit "$RELEASE_TAG" --notes-file build/synced-release-notes.md
+            echo "Updated existing GitHub Release channel metadata in place."
+          fi
+
       - name: Nothing changed
         if: steps.plan.outputs.changed != 'true'
         run: echo "No Morphe patch, supported YouTube version, or Original release-channel change detected."
