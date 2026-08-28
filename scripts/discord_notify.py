@@ -62,6 +62,11 @@ def main():
     p.add_argument("--original-label", required=True)
     p.add_argument("--download-url", required=True)
     p.add_argument("--sha256")
+    p.add_argument(
+        "--edit-only",
+        action="store_true",
+        help="Only edit an existing matching message; never create a new one.",
+    )
     args = p.parse_args()
 
     description = (
@@ -101,6 +106,8 @@ def main():
                 payload,
             )
             print(f"Discord message edited: {response.get('id', message_id)}")
+        elif args.edit_only:
+            print("No matching Discord message found; edit-only mode will not create a duplicate.")
         else:
             response = discord_request(
                 args.token,
