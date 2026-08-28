@@ -3,6 +3,12 @@ name: Automatic Morphe YouTube Patcher
 on:
   schedule:
     - cron: "17 * * * *"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/patch-youtube.yml"
+      - "scripts/discord_notify.py"
   workflow_dispatch:
     inputs:
       force:
@@ -57,6 +63,7 @@ jobs:
         run: python scripts/plan.py
 
       - name: Sync existing GitHub Release channel metadata
+        id: sync_release
         if: steps.plan.outputs.asset_exists == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -64,15 +71,17 @@ jobs:
           RELEASE_TAG: ${{ steps.resolve.outputs.release_tag }}
         run: |
           set -euo pipefail
-          mkdir -p build
-          gh release view "$RELEASE_TAG" --json body --jq .body > build/current-release-notes.md
-          cp build/current-release-notes.md build/synced-release-notes.md
+          mkdir -p build/release-metadata
+          UPDATED=false
+
+          gh release view "$RELEASE_TAG" --json body --jq .body > build/release-metadata/current-release-notes.md
+          cp build/release-metadata/current-release-notes.md build/release-metadata/synced-release-notes.md
           python - <<'PY'
           import os
           import re
           from pathlib import Path
 
-          path = Path("build/synced-release-notes.md")
+          path = Path("build/release-metadata/synced-release-notes.md")
           text = path.read_text(encoding="utf-8")
           desired = os.environ["ORIGINAL_LABEL"]
           updated, count = re.subn(
@@ -85,12 +94,57 @@ jobs:
           path.write_text(updated, encoding="utf-8")
           PY
 
-          if cmp -s build/current-release-notes.md build/synced-release-notes.md; then
-            echo "GitHub Release channel metadata already current."
-          else
-            gh release edit "$RELEASE_TAG" --notes-file build/synced-release-notes.md
-            echo "Updated existing GitHub Release channel metadata in place."
+          if ! cmp -s build/release-metadata/current-release-notes.md build/release-metadata/synced-release-notes.md; then
+            gh release edit "$RELEASE_TAG" --notes-file build/release-metadata/synced-release-notes.md
+            echo "Updated existing GitHub Release description in place."
+            UPDATED=true
           fi
+
+          gh release download "$RELEASE_TAG" \
+            --pattern build-info.json \
+            --dir build/release-metadata/current \
+            --clobber
+
+          jq \
+            --slurpfile original build/original.json \
+            '.originalChannel = $original[0].channel
+             | .originalLabel = $original[0].display_label
+             | .originalLatestStableSeen = $original[0].latest_stable_seen
+             | .originalLatestPrereleaseSeen = $original[0].latest_prerelease_seen' \
+            build/release-metadata/current/build-info.json \
+            > build/release-metadata/synced-build-info.json
+
+          if ! cmp -s build/release-metadata/current/build-info.json build/release-metadata/synced-build-info.json; then
+            cp build/release-metadata/synced-build-info.json build-info.json
+            gh release upload "$RELEASE_TAG" build-info.json --clobber
+            rm -f build-info.json
+            echo "Updated existing build-info.json channel metadata in place."
+            UPDATED=true
+          fi
+
+          echo "updated=$UPDATED" >> "$GITHUB_OUTPUT"
+          if [ "$UPDATED" = "false" ]; then
+            echo "GitHub Release channel metadata already current."
+          fi
+
+      - name: Repair existing Discord message after metadata-only drift
+        if: steps.sync_release.outputs.updated == 'true' && steps.plan.outputs.changed != 'true'
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
+        run: |
+          set -euo pipefail
+          SHA="$(jq -r '.sha256' build/release-metadata/synced-build-info.json)"
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${{ steps.resolve.outputs.release_tag }}/${{ steps.resolve.outputs.asset_name }}"
+          python scripts/discord_notify.py \
+            --token "$DISCORD_BOT_TOKEN" \
+            --channel "$DISCORD_CHANNEL_ID" \
+            --youtube-version "${{ steps.resolve.outputs.youtube_version }}" \
+            --patch-version "${{ steps.resolve.outputs.patch_version }}" \
+            --original-label "${{ steps.original.outputs.original_label }}" \
+            --download-url "$URL" \
+            --sha256 "$SHA" \
+            --edit-only
 
       - name: Nothing changed
         if: steps.plan.outputs.changed != 'true'
