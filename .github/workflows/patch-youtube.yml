@@ -2,7 +2,7 @@ name: Automatic Morphe YouTube Patcher
 
 on:
   schedule:
-    - cron: "17 * * * *"
+    - cron: "19 * * * *"
   push:
     branches:
       - main
