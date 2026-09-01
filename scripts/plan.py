@@ -43,14 +43,27 @@ def main():
     state = read_json("state.json", {})
     force = os.getenv("FORCE", "false").lower() == "true"
 
-    desired = {
-        "youtube_version": resolved["youtube_version"],
-        "patch_version": resolved["patch_version"],
-        "original_channel": original["channel"],
-        "original_label": original["display_label"],
-    }
-    state_matches = all(state.get(k) == v for k, v in desired.items())
-    changed = force or not state_matches
+    current_patch_prerelease = bool(resolved.get("patch_prerelease"))
+    youtube_changed = state.get("youtube_version") != resolved["youtube_version"]
+
+    # Intermediate dev/prerelease bumps do not deserve a rebuild by themselves.
+    # A stable Morphe patch release does: this covers dev -> release promotion as
+    # well as stable hotfixes. If a dev release introduces a new supported
+    # YouTube target, youtube_changed still triggers an immediate build.
+    stable_patch_changed = (
+        not current_patch_prerelease
+        and state.get("patch_version") != resolved["patch_version"]
+    )
+
+    build_reason = None
+    if force:
+        build_reason = "force"
+    elif youtube_changed:
+        build_reason = "youtube_version_changed"
+    elif stable_patch_changed:
+        build_reason = "stable_patch_changed"
+
+    changed = build_reason is not None
 
     repo = os.getenv("GITHUB_REPOSITORY", "")
     release_exists = False
@@ -65,9 +78,8 @@ def main():
             if e.code != 404:
                 raise
 
-    # Normal scheduled runs only build when the desired asset does not exist.
-    # An explicit force run must rebuild even when the same release/tag is
-    # already published, so it can repair/replace a bad or incomplete APK.
+    # Build only for one of the explicit reasons above. Force always rebuilds;
+    # otherwise an already-published matching asset is reused.
     needs_build = changed and (force or not asset_exists)
     needs_notify = changed
 
@@ -77,11 +89,22 @@ def main():
         "needs_notify": needs_notify,
         "release_exists": release_exists,
         "asset_exists": asset_exists,
+        "youtube_changed": youtube_changed,
+        "stable_patch_changed": stable_patch_changed,
+        "build_reason": build_reason or "none",
     })
     print(json.dumps({
-        "desired": desired,
+        "resolved": {
+            "youtube_version": resolved["youtube_version"],
+            "patch_version": resolved["patch_version"],
+            "patch_prerelease": current_patch_prerelease,
+            "original_channel": original.get("channel"),
+        },
         "state": state,
         "force": force,
+        "youtube_changed": youtube_changed,
+        "stable_patch_changed": stable_patch_changed,
+        "build_reason": build_reason,
         "changed": changed,
         "release_exists": release_exists,
         "asset_exists": asset_exists,
