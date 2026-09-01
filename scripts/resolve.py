@@ -44,14 +44,20 @@ def version_key(v: str):
     return tuple(int(x) for x in v.split("."))
 
 
-def latest_prerelease(repo: str):
+def latest_patch_release(repo: str):
+    """Return the newest published patch release, stable or prerelease.
+
+    We still inspect dev releases so a newly-supported YouTube target can be
+    picked up immediately. Whether that release deserves a rebuild is decided
+    by plan.py; intermediate dev bumps with the same YouTube target are ignored.
+    """
     releases = get_json(f"https://api.github.com/repos/{repo}/releases?per_page=100")
     candidates = [
         r for r in releases
-        if r.get("prerelease") and not r.get("draft") and r.get("published_at")
+        if not r.get("draft") and r.get("published_at")
     ]
     if not candidates:
-        raise RuntimeError(f"No published prerelease found for {repo}")
+        raise RuntimeError(f"No published release found for {repo}")
     return max(candidates, key=lambda r: r["published_at"])
 
 
@@ -110,9 +116,11 @@ def write_output(values: dict):
 
 
 def main():
-    patch_release = latest_prerelease(PATCH_REPO)
+    patch_release = latest_patch_release(PATCH_REPO)
     patch_tag = patch_release["tag_name"]
     patch_version = patch_tag.removeprefix("v")
+    patch_prerelease = bool(patch_release.get("prerelease"))
+    patch_label = "latest dev" if patch_prerelease else "latest release"
     mpp_url = find_asset(
         patch_release,
         lambda n: n.endswith(".mpp") and "sources" not in n and "javadoc" not in n,
@@ -139,7 +147,8 @@ def main():
         "patch_repo": PATCH_REPO,
         "patch_tag": patch_tag,
         "patch_version": patch_version,
-        "patch_prerelease": bool(patch_release.get("prerelease")),
+        "patch_prerelease": patch_prerelease,
+        "patch_label": patch_label,
         "mpp_url": mpp_url,
         "youtube_package": YOUTUBE_PACKAGE,
         "youtube_version": target["version"],
@@ -158,6 +167,8 @@ def main():
     write_output({
         "patch_version": patch_version,
         "patch_tag": patch_tag,
+        "patch_prerelease": patch_prerelease,
+        "patch_label": patch_label,
         "mpp_url": mpp_url,
         "youtube_version": target["version"],
         "morphe_target_channel": target["channel"],
@@ -168,7 +179,7 @@ def main():
     })
 
     print(
-        f"Morphe patches={patch_version} (dev), "
+        f"Morphe patches={patch_version} ({'prerelease' if patch_prerelease else 'stable'}), "
         f"YouTube={target['version']} ({target['channel']} in Morphe), "
         f"Desktop={desktop_version}"
     )
