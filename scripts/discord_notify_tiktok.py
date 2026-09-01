@@ -33,7 +33,7 @@ def feature_fields(features):
 
     fields = []
     total = len(chunks)
-    for i, chunk in enumerate(chunks[:5], start=1):
+    for i, chunk in enumerate(chunks, start=1):
         title = "Features" if total == 1 else f"Features {i}/{total}"
         fields.append({"name": title, "value": chunk, "inline": False})
     return fields
