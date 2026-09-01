@@ -1,8 +1,8 @@
 {
   "youtube_version": "21.35.442",
-  "patch_version": "1.41.0-dev.12",
+  "patch_version": "1.41.0",
   "original_channel": "beta",
   "original_label": "latest pre-release (Original)",
-  "published_at": "2026-09-01T09:26:40.679816+00:00",
-  "release_tag": "youtube-21.35.442-morphe-1.41.0-dev.12"
+  "published_at": "2026-09-01T16:48:53.853449+00:00",
+  "release_tag": "youtube-21.35.442-morphe-1.41.0"
 }
