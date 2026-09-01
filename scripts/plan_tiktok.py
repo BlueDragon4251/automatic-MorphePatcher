@@ -47,10 +47,20 @@ def main():
         "tiktok_version": resolved["tiktok_version"],
         "patch_version": resolved["patch_version"],
         "patch_tag": resolved["patch_tag"],
+        "morphe_extra_patch_version": resolved["morphe_extra_patch_version"],
+        "morphe_extra_patch_tag": resolved["morphe_extra_patch_tag"],
         "original_channel": original["channel"],
     }
     state_matches = all(state.get(k) == v for k, v in desired.items())
     changed = force or not state_matches
+
+    # The official Morphe bundle is an additional input to the same TikTok
+    # release asset. If it changes, rebuild/replace that asset even though the
+    # BlueIT TikTok patch release tag itself may be unchanged.
+    morphe_extras_changed = (
+        state.get("morphe_extra_patch_version") != resolved["morphe_extra_patch_version"]
+        or state.get("morphe_extra_patch_tag") != resolved["morphe_extra_patch_tag"]
+    )
 
     repo = os.getenv("GITHUB_REPOSITORY", "")
     release_exists = False
@@ -68,13 +78,14 @@ def main():
             if e.code != 404:
                 raise
 
-    needs_build = changed and (force or not asset_exists)
+    needs_build = changed and (force or not asset_exists or morphe_extras_changed)
     needs_notify = changed
 
     output({
         "changed": changed,
         "needs_build": needs_build,
         "needs_notify": needs_notify,
+        "morphe_extras_changed": morphe_extras_changed,
         "release_exists": release_exists,
         "asset_exists": asset_exists,
     })
@@ -83,6 +94,7 @@ def main():
         "state": state,
         "force": force,
         "changed": changed,
+        "morphe_extras_changed": morphe_extras_changed,
         "release_exists": release_exists,
         "asset_exists": asset_exists,
         "needs_build": needs_build,
