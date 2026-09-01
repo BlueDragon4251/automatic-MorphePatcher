@@ -31,10 +31,6 @@ def discord_request(token: str, method: str, url: str, payload=None):
 
 
 def find_existing_message(token: str, channel: str, download_url: str):
-    # A channel change (pre-release <-> release) keeps the same GitHub release
-    # tag and therefore the same download URL. Reuse that as the stable key for
-    # locating the already published Discord message. This also works for old
-    # messages created before we started tracking a Discord message id.
     query = urllib.parse.urlencode({"limit": 100})
     messages = discord_request(
         token,
@@ -51,6 +47,13 @@ def find_existing_message(token: str, channel: str, download_url: str):
             if download_url in description:
                 return message.get("id")
     return None
+
+
+def patch_label(version: str) -> str:
+    lower = version.lower()
+    if any(marker in lower for marker in ("-dev", "-alpha", "-beta", "-rc", "-pre")):
+        return "latest dev"
+    return "latest release"
 
 
 def main():
@@ -72,7 +75,7 @@ def main():
     description = (
         f"**Youtube Version:** `{args.youtube_version}` "
         f"(latest release (Morphe) & {args.original_label})\n\n"
-        f"**Patches Version:** `{args.patch_version}` (latest dev)\n\n"
+        f"**Patches Version:** `{args.patch_version}` ({patch_label(args.patch_version)})\n\n"
         "⚠️ **ACHTUNG!** : Bitte überprüfe, dass deine originale YouTube app auf dem neuesten Stand ist, "
         "sonst könnte es zu abstürzen bzw Wiedergabe Fehler kommen.\n\n"
         f"[**APK herunterladen**]({args.download_url})"
