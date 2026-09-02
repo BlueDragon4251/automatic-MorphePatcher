@@ -127,8 +127,8 @@ jobs:
             echo "GitHub Release channel metadata already current."
           fi
 
-      - name: Repair existing Discord message after metadata-only drift
-        if: steps.sync_release.outputs.updated == 'true' && steps.plan.outputs.changed != 'true'
+      - name: Reconcile existing Discord message metadata
+        if: steps.plan.outputs.asset_exists == 'true' && steps.plan.outputs.changed != 'true'
         env:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
