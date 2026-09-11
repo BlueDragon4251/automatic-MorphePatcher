@@ -83,15 +83,34 @@ jobs:
 
           path = Path("build/release-metadata/synced-release-notes.md")
           text = path.read_text(encoding="utf-8")
-          desired = os.environ["ORIGINAL_LABEL"]
-          updated, count = re.subn(
+
+          original_label = os.environ["ORIGINAL_LABEL"]
+          text, original_count = re.subn(
               r"latest (?:pre-)?release \(Original\)",
-              desired,
+              original_label,
               text,
           )
-          if count == 0:
+          if original_count == 0:
               raise SystemExit("Could not find Original release-channel label in existing release notes")
-          path.write_text(updated, encoding="utf-8")
+
+          patch_match = re.search(
+              r"(\*\*Patches Version:\*\*\s*([^\s(]+)\s*)\((latest dev|latest release)\)",
+              text,
+              flags=re.IGNORECASE,
+          )
+          if not patch_match:
+              raise SystemExit("Could not find Morphe patch release-channel label in existing release notes")
+
+          published_patch_version = patch_match.group(2)
+          patch_label = "latest dev" if "-" in published_patch_version else "latest release"
+          text = (
+              text[: patch_match.start()]
+              + patch_match.group(1)
+              + f"({patch_label})"
+              + text[patch_match.end() :]
+          )
+
+          path.write_text(text, encoding="utf-8")
           PY
 
           if ! cmp -s build/release-metadata/current-release-notes.md build/release-metadata/synced-release-notes.md; then
@@ -135,12 +154,13 @@ jobs:
         run: |
           set -euo pipefail
           SHA="$(jq -r '.sha256' build/release-metadata/synced-build-info.json)"
+          PATCH_VERSION="$(jq -r '.patchesVersion' build/release-metadata/synced-build-info.json)"
           URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${{ steps.resolve.outputs.release_tag }}/${{ steps.resolve.outputs.asset_name }}"
           python scripts/discord_notify.py \
             --token "$DISCORD_BOT_TOKEN" \
             --channel "$DISCORD_CHANNEL_ID" \
             --youtube-version "${{ steps.resolve.outputs.youtube_version }}" \
-            --patch-version "${{ steps.resolve.outputs.patch_version }}" \
+            --patch-version "$PATCH_VERSION" \
             --original-label "${{ steps.original.outputs.original_label }}" \
             --download-url "$URL" \
             --sha256 "$SHA" \
@@ -273,6 +293,12 @@ jobs:
           set -euo pipefail
           APK="dist/${{ steps.resolve.outputs.asset_name }}"
           SHA="$(sha256sum "$APK" | awk '{print $1}')"
+          PATCH_VERSION="${{ steps.resolve.outputs.patch_version }}"
+          if [[ "$PATCH_VERSION" == *-* ]]; then
+            PATCH_LABEL="latest dev"
+          else
+            PATCH_LABEL="latest release"
+          fi
           jq -n \
             --slurpfile resolved build/resolved.json \
             --slurpfile original build/original.json \
@@ -293,7 +319,7 @@ jobs:
           cat > build/release-notes.md <<EOF
           **Youtube Version:** ${{ steps.resolve.outputs.youtube_version }} (latest release (Morphe) & ${{ steps.original.outputs.original_label }})
 
-          **Patches Version:** ${{ steps.resolve.outputs.patch_version }} (latest dev)
+          **Patches Version:** $PATCH_VERSION ($PATCH_LABEL)
 
           **ACHTUNG!** : Bitte überprüfe, dass deine originale YouTube app auf dem neuesten Stand ist, sonst könnte es zu abstürzen bzw Wiedergabe Fehler kommen.
 
