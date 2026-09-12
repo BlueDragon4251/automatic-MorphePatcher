@@ -98,7 +98,7 @@ jobs:
 
           original_label = os.environ["ORIGINAL_LABEL"]
           text, original_count = re.subn(
-              r"latest (?:pre-)?release \(Original\)",
+              r"(?:latest )?(?:pre-)?release \(Original\)",
               original_label,
               text,
           )
