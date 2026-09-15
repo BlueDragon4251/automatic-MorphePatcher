@@ -73,7 +73,6 @@ jobs:
           set -euo pipefail
           mkdir -p build/release-metadata
           UPDATED=false
-
           RELEASE_TAG="$RESOLVED_RELEASE_TAG"
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             RELEASE_TAG="$(jq -r '.release_tag // empty' state.json 2>/dev/null || true)"
@@ -85,68 +84,34 @@ jobs:
             exit 0
           fi
           echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
-
           gh release view "$RELEASE_TAG" --json body --jq .body > build/release-metadata/current-release-notes.md
           cp build/release-metadata/current-release-notes.md build/release-metadata/synced-release-notes.md
           python - <<'PY'
-          import os
-          import re
+          import os, re
           from pathlib import Path
-
           path = Path("build/release-metadata/synced-release-notes.md")
           text = path.read_text(encoding="utf-8")
-
           original_label = os.environ["ORIGINAL_LABEL"]
-          text, original_count = re.subn(
-              r"(?:latest )?(?:pre-)?release \(Original\)",
-              original_label,
-              text,
-          )
+          text, original_count = re.subn(r"(?:latest )?(?:pre-)?release \(Original\)", original_label, text)
           if original_count == 0:
               raise SystemExit("Could not find Original release-channel label in existing release notes")
-
-          patch_match = re.search(
-              r"(\*\*Patches Version:\*\*\s*([^\s(]+)\s*)\((latest dev|latest release)\)",
-              text,
-              flags=re.IGNORECASE,
-          )
+          patch_match = re.search(r"(\*\*Patches Version:\*\*\s*([^\s(]+)\s*)\((latest dev|latest release)\)", text, flags=re.IGNORECASE)
           if not patch_match:
               raise SystemExit("Could not find Morphe patch release-channel label in existing release notes")
-
           published_patch_version = patch_match.group(2)
           patch_label = "latest dev" if "-" in published_patch_version else "latest release"
-          text = (
-              text[: patch_match.start()]
-              + patch_match.group(1)
-              + f"({patch_label})"
-              + text[patch_match.end() :]
-          )
-
+          text = text[:patch_match.start()] + patch_match.group(1) + f"({patch_label})" + text[patch_match.end():]
           path.write_text(text, encoding="utf-8")
           PY
-
           if ! cmp -s build/release-metadata/current-release-notes.md build/release-metadata/synced-release-notes.md; then
             gh release edit "$RELEASE_TAG" --notes-file build/release-metadata/synced-release-notes.md
             echo "Updated existing GitHub Release description in place."
             UPDATED=true
           fi
-
           rm -rf build/release-metadata/current
           mkdir -p build/release-metadata/current
-          gh release download "$RELEASE_TAG" \
-            --pattern build-info.json \
-            --dir build/release-metadata/current \
-            --clobber
-
-          jq \
-            --slurpfile original build/original.json \
-            '.originalChannel = $original[0].channel
-             | .originalLabel = $original[0].display_label
-             | .originalLatestStableSeen = $original[0].latest_stable_seen
-             | .originalLatestPrereleaseSeen = $original[0].latest_prerelease_seen' \
-            build/release-metadata/current/build-info.json \
-            > build/release-metadata/synced-build-info.json
-
+          gh release download "$RELEASE_TAG" --pattern build-info.json --dir build/release-metadata/current --clobber
+          jq --slurpfile original build/original.json '.originalChannel = $original[0].channel | .originalLabel = $original[0].display_label | .originalLatestStableSeen = $original[0].latest_stable_seen | .originalLatestPrereleaseSeen = $original[0].latest_prerelease_seen' build/release-metadata/current/build-info.json > build/release-metadata/synced-build-info.json
           if ! cmp -s build/release-metadata/current/build-info.json build/release-metadata/synced-build-info.json; then
             cp build/release-metadata/synced-build-info.json build-info.json
             gh release upload "$RELEASE_TAG" build-info.json --clobber
@@ -154,11 +119,7 @@ jobs:
             echo "Updated existing build-info.json channel metadata in place."
             UPDATED=true
           fi
-
           echo "updated=$UPDATED" >> "$GITHUB_OUTPUT"
-          if [ "$UPDATED" = "false" ]; then
-            echo "GitHub Release channel metadata already current."
-          fi
 
       - name: Reconcile existing Discord message metadata
         if: steps.plan.outputs.needs_build != 'true' && steps.sync_release.outputs.release_tag != ''
@@ -173,15 +134,7 @@ jobs:
           ASSET="$(jq -r '.asset' build/release-metadata/synced-build-info.json)"
           RELEASE_TAG="${{ steps.sync_release.outputs.release_tag }}"
           URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${ASSET}"
-          python scripts/discord_notify.py \
-            --token "$DISCORD_BOT_TOKEN" \
-            --channel "$DISCORD_CHANNEL_ID" \
-            --youtube-version "$YOUTUBE_VERSION" \
-            --patch-version "$PATCH_VERSION" \
-            --original-label "${{ steps.original.outputs.original_label }}" \
-            --download-url "$URL" \
-            --sha256 "$SHA" \
-            --edit-only
+          python scripts/discord_notify.py --token "$DISCORD_BOT_TOKEN" --channel "$DISCORD_CHANNEL_ID" --youtube-version "$YOUTUBE_VERSION" --patch-version "$PATCH_VERSION" --original-label "${{ steps.original.outputs.original_label }}" --download-url "$URL" --sha256 "$SHA" --edit-only
 
       - name: Nothing changed
         if: steps.plan.outputs.changed != 'true'
@@ -212,36 +165,37 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - name: Set up Android SDK
+      - name: Prepare Android SDK
         if: steps.plan.outputs.needs_build == 'true'
-        uses: android-actions/setup-android@v3
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          test -n "$SDK_ROOT" || { echo "Android SDK is not available on this runner"; exit 1; }
+          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager 2>/dev/null | head -1)"
+          test -x "$SDKMANAGER" || { echo "sdkmanager not found in $SDK_ROOT"; exit 1; }
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
 
       - name: Install Android build tools
         if: steps.plan.outputs.needs_build == 'true'
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "build-tools;35.0.0" >/dev/null
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "build-tools;35.0.0" "platform-tools"
           echo "$ANDROID_HOME/build-tools/35.0.0" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
 
       - name: Download exact Morphe assets
         if: steps.plan.outputs.needs_build == 'true'
         run: |
           mkdir -p build dist
-          curl --fail --location --retry 3 \
-            "${{ steps.resolve.outputs.mpp_url }}" \
-            --output build/patches.mpp
-          curl --fail --location --retry 3 \
-            "${{ steps.resolve.outputs.desktop_jar_url }}" \
-            --output build/morphe-desktop.jar
+          curl --fail --location --retry 3 "${{ steps.resolve.outputs.mpp_url }}" --output build/patches.mpp
+          curl --fail --location --retry 3 "${{ steps.resolve.outputs.desktop_jar_url }}" --output build/morphe-desktop.jar
 
       - name: Download exact Original YouTube APK
         if: steps.plan.outputs.needs_build == 'true'
         id: stock
-        run: |
-          python scripts/apkmirror.py \
-            --version "${{ steps.resolve.outputs.youtube_version }}" \
-            --metadata build/original.json \
-            --out build/youtube-original.apk
+        run: python scripts/apkmirror.py --version "${{ steps.resolve.outputs.youtube_version }}" --metadata build/original.json --out build/youtube-original.apk
 
       - name: Verify Original APK
         if: steps.plan.outputs.needs_build == 'true'
@@ -249,18 +203,12 @@ jobs:
           set -euo pipefail
           apksigner verify --verbose --print-certs build/youtube-original.apk
           APKANALYZER="$(command -v apkanalyzer || true)"
-          if [ -z "$APKANALYZER" ]; then
-            APKANALYZER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name apkanalyzer | head -1)"
-          fi
+          if [ -z "$APKANALYZER" ]; then APKANALYZER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name apkanalyzer | head -1)"; fi
           test -x "$APKANALYZER" || { echo "apkanalyzer not found"; exit 1; }
           ACTUAL_PACKAGE="$($APKANALYZER manifest application-id build/youtube-original.apk)"
           ACTUAL_VERSION="$($APKANALYZER manifest version-name build/youtube-original.apk)"
-          test "$ACTUAL_PACKAGE" = "com.google.android.youtube" || {
-            echo "Unexpected package: $ACTUAL_PACKAGE"; exit 1;
-          }
-          test "$ACTUAL_VERSION" = "${{ steps.resolve.outputs.youtube_version }}" || {
-            echo "Unexpected version: $ACTUAL_VERSION"; exit 1;
-          }
+          test "$ACTUAL_PACKAGE" = "com.google.android.youtube" || { echo "Unexpected package: $ACTUAL_PACKAGE"; exit 1; }
+          test "$ACTUAL_VERSION" = "${{ steps.resolve.outputs.youtube_version }}" || { echo "Unexpected version: $ACTUAL_VERSION"; exit 1; }
 
       - name: Restore signing key
         if: steps.plan.outputs.needs_build == 'true'
@@ -274,10 +222,7 @@ jobs:
         if: steps.plan.outputs.needs_build == 'true'
         run: |
           set -euo pipefail
-          java -jar build/morphe-desktop.jar options-create \
-            --patches build/patches.mpp \
-            --out build/full-patch-options.json \
-            --filter-package-name com.google.android.youtube
+          java -jar build/morphe-desktop.jar options-create --patches build/patches.mpp --out build/full-patch-options.json --filter-package-name com.google.android.youtube
           python scripts/enable_full_patch.py build/full-patch-options.json
 
       - name: Full Morphe patch
@@ -288,18 +233,7 @@ jobs:
         run: |
           set -euo pipefail
           OUT="dist/${{ steps.resolve.outputs.asset_name }}"
-          java -jar build/morphe-desktop.jar patch \
-            --patches build/patches.mpp \
-            --options-file build/full-patch-options.json \
-            --keystore build/morphe-signing.keystore \
-            --keystore-password "$MORPHE_KEYSTORE_PASSWORD" \
-            --keystore-entry-alias "$MORPHE_KEY_ALIAS" \
-            --keystore-entry-password "$MORPHE_KEYSTORE_PASSWORD" \
-            --verify-with-sdk \
-            --result-file build/patch-result.json \
-            --out "$OUT" \
-            build/youtube-original.apk
-
+          java -jar build/morphe-desktop.jar patch --patches build/patches.mpp --options-file build/full-patch-options.json --keystore build/morphe-signing.keystore --keystore-password "$MORPHE_KEYSTORE_PASSWORD" --keystore-entry-alias "$MORPHE_KEY_ALIAS" --keystore-entry-password "$MORPHE_KEYSTORE_PASSWORD" --verify-with-sdk --result-file build/patch-result.json --out "$OUT" build/youtube-original.apk
           test -s "$OUT"
           apksigner verify --verbose --print-certs "$OUT"
           sha256sum "$OUT" | tee build/patched.sha256
@@ -311,28 +245,8 @@ jobs:
           APK="dist/${{ steps.resolve.outputs.asset_name }}"
           SHA="$(sha256sum "$APK" | awk '{print $1}')"
           PATCH_VERSION="${{ steps.resolve.outputs.patch_version }}"
-          if [[ "$PATCH_VERSION" == *-* ]]; then
-            PATCH_LABEL="latest dev"
-          else
-            PATCH_LABEL="latest release"
-          fi
-          jq -n \
-            --slurpfile resolved build/resolved.json \
-            --slurpfile original build/original.json \
-            --arg sha256 "$SHA" \
-            --arg asset "${{ steps.resolve.outputs.asset_name }}" \
-            '{
-              youtubeVersion: $resolved[0].youtube_version,
-              patchesVersion: $resolved[0].patch_version,
-              morpheTargetChannel: $resolved[0].morphe_target_channel,
-              originalChannel: $original[0].channel,
-              originalLabel: $original[0].display_label,
-              originalLatestStableSeen: $original[0].latest_stable_seen,
-              originalLatestPrereleaseSeen: $original[0].latest_prerelease_seen,
-              asset: $asset,
-              sha256: $sha256
-            }' > build/build-info.json
-
+          if [[ "$PATCH_VERSION" == *-* ]]; then PATCH_LABEL="latest dev"; else PATCH_LABEL="latest release"; fi
+          jq -n --slurpfile resolved build/resolved.json --slurpfile original build/original.json --arg sha256 "$SHA" --arg asset "${{ steps.resolve.outputs.asset_name }}" '{youtubeVersion: $resolved[0].youtube_version, patchesVersion: $resolved[0].patch_version, morpheTargetChannel: $resolved[0].morphe_target_channel, originalChannel: $original[0].channel, originalLabel: $original[0].display_label, originalLatestStableSeen: $original[0].latest_stable_seen, originalLatestPrereleaseSeen: $original[0].latest_prerelease_seen, asset: $asset, sha256: $sha256}' > build/build-info.json
           cat > build/release-notes.md <<EOF
           **Youtube Version:** ${{ steps.resolve.outputs.youtube_version }} (latest release (Morphe) & ${{ steps.original.outputs.original_label }})
 
@@ -353,13 +267,9 @@ jobs:
           APK="dist/${{ steps.resolve.outputs.asset_name }}"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$APK" build/build-info.json --clobber
-            gh release edit "$TAG" \
-              --title "YouTube ${{ steps.resolve.outputs.youtube_version }} • Morphe ${{ steps.resolve.outputs.patch_version }}" \
-              --notes-file build/release-notes.md
+            gh release edit "$TAG" --title "YouTube ${{ steps.resolve.outputs.youtube_version }} • Morphe ${{ steps.resolve.outputs.patch_version }}" --notes-file build/release-notes.md
           else
-            gh release create "$TAG" "$APK" build/build-info.json \
-              --title "YouTube ${{ steps.resolve.outputs.youtube_version }} • Morphe ${{ steps.resolve.outputs.patch_version }}" \
-              --notes-file build/release-notes.md
+            gh release create "$TAG" "$APK" build/build-info.json --title "YouTube ${{ steps.resolve.outputs.youtube_version }} • Morphe ${{ steps.resolve.outputs.patch_version }}" --notes-file build/release-notes.md
           fi
 
       - name: Get published APK SHA-256
@@ -373,7 +283,6 @@ jobs:
           ASSET="${{ steps.resolve.outputs.asset_name }}"
           URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${ASSET}"
           echo "download_url=$URL" >> "$GITHUB_OUTPUT"
-
           if [ -f "dist/$ASSET" ]; then
             SHA="$(sha256sum "dist/$ASSET" | awk '{print $1}')"
           else
@@ -389,27 +298,14 @@ jobs:
         env:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
-        run: |
-          python scripts/discord_notify.py \
-            --token "$DISCORD_BOT_TOKEN" \
-            --channel "$DISCORD_CHANNEL_ID" \
-            --youtube-version "${{ steps.resolve.outputs.youtube_version }}" \
-            --patch-version "${{ steps.resolve.outputs.patch_version }}" \
-            --original-label "${{ steps.original.outputs.original_label }}" \
-            --download-url "${{ steps.published.outputs.download_url }}" \
-            --sha256 "${{ steps.published.outputs.sha256 }}"
+        run: python scripts/discord_notify.py --token "$DISCORD_BOT_TOKEN" --channel "$DISCORD_CHANNEL_ID" --youtube-version "${{ steps.resolve.outputs.youtube_version }}" --patch-version "${{ steps.resolve.outputs.patch_version }}" --original-label "${{ steps.original.outputs.original_label }}" --download-url "${{ steps.published.outputs.download_url }}" --sha256 "${{ steps.published.outputs.sha256 }}"
 
       - name: Record successfully published state
         if: steps.plan.outputs.needs_notify == 'true'
         run: |
           set -euo pipefail
-
-          # The branch can move while a long APK build is running. Sync before
-          # writing state so a harmless concurrent repository change cannot make
-          # the final state push fail with a non-fast-forward error.
           git fetch origin main
           git rebase origin/main
-
           python - <<'PY'
           import json
           from datetime import datetime, timezone
@@ -426,7 +322,6 @@ jobs:
           }
           Path('state.json').write_text(json.dumps(state, indent=2) + '\n')
           PY
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add state.json
@@ -435,9 +330,7 @@ jobs:
           else
             git commit -m "chore: record published Morphe build"
             for attempt in 1 2 3; do
-              if git push origin HEAD:main; then
-                exit 0
-              fi
+              if git push origin HEAD:main; then exit 0; fi
               echo "State push raced with another update; retrying ($attempt/3)..."
               git fetch origin main
               git rebase origin/main
