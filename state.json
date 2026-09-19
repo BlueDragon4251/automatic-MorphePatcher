@@ -1,8 +1,8 @@
 {
-  "youtube_version": "21.37.42",
-  "patch_version": "1.43.1-dev.2",
-  "original_channel": "stable",
-  "original_label": "latest release (Original)",
-  "published_at": "2026-09-15T14:04:51.349200+00:00",
-  "release_tag": "youtube-21.37.42-morphe-1.43.1-dev.2"
+  "youtube_version": "21.38.123",
+  "patch_version": "1.44.0-dev.7",
+  "original_channel": "beta",
+  "original_label": "latest pre-release (Original)",
+  "published_at": "2026-09-19T10:24:44.104234+00:00",
+  "release_tag": "youtube-21.38.123-morphe-1.44.0-dev.7"
 }
