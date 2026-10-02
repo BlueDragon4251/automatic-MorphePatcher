@@ -1,5 +1,6 @@
 name: Automatic Morphe YouTube Patcher
 
+# Re-evaluate immediately when a new stable Morphe release requires a rebuild.
 on:
   schedule:
     - cron: "19 * * * *"
@@ -298,7 +299,15 @@ jobs:
         env:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
-        run: python scripts/discord_notify.py --token "$DISCORD_BOT_TOKEN" --channel "$DISCORD_CHANNEL_ID" --youtube-version "${{ steps.resolve.outputs.youtube_version }}" --patch-version "${{ steps.resolve.outputs.patch_version }}" --original-label "${{ steps.original.outputs.original_label }}" --download-url "${{ steps.published.outputs.download_url }}" --sha256 "${{ steps.published.outputs.sha256 }}"
+        run: |
+          python scripts/discord_notify.py \
+            --token "$DISCORD_BOT_TOKEN" \
+            --channel "$DISCORD_CHANNEL_ID" \
+            --youtube-version "${{ steps.resolve.outputs.youtube_version }}" \
+            --patch-version "${{ steps.resolve.outputs.patch_version }}" \
+            --original-label "${{ steps.original.outputs.original_label }}" \
+            --download-url "${{ steps.published.outputs.download_url }}" \
+            --sha256 "${{ steps.published.outputs.sha256 }}"
 
       - name: Record successfully published state
         if: steps.plan.outputs.needs_notify == 'true'
