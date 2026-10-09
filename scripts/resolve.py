@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import html
 import os
 import re
 import sys
@@ -80,7 +81,7 @@ def parse_youtube_supported_versions(readme: str):
     end = readme.find("</details>", start)
     if end < 0:
         end = min(len(readme), start + 20000)
-    block = readme[start:end]
+    block = html.unescape(readme[start:end])
 
     support_marker = "**🎯 Supported versions:**"
     s = block.find(support_marker)
