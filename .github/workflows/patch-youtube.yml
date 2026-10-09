@@ -69,6 +69,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ORIGINAL_LABEL: ${{ steps.original.outputs.original_label }}
+          MORPHE_TARGET_CHANNEL: ${{ steps.resolve.outputs.morphe_target_channel }}
           RESOLVED_RELEASE_TAG: ${{ steps.resolve.outputs.release_tag }}
         run: |
           set -euo pipefail
@@ -102,6 +103,8 @@ jobs:
           published_patch_version = patch_match.group(2)
           patch_label = "latest dev" if "-" in published_patch_version else "latest release"
           text = text[:patch_match.start()] + patch_match.group(1) + f"({patch_label})" + text[patch_match.end():]
+          channel = os.environ['MORPHE_TARGET_CHANNEL']
+          text = re.sub(r'latest release \(Morphe\)(?:, (?:stable|experimental) target)?', f'latest release (Morphe), {channel} target', text)
           path.write_text(text, encoding="utf-8")
           PY
           if ! cmp -s build/release-metadata/current-release-notes.md build/release-metadata/synced-release-notes.md; then
@@ -112,7 +115,7 @@ jobs:
           rm -rf build/release-metadata/current
           mkdir -p build/release-metadata/current
           gh release download "$RELEASE_TAG" --pattern build-info.json --dir build/release-metadata/current --clobber
-          jq --slurpfile original build/original.json '.originalChannel = $original[0].channel | .originalLabel = $original[0].display_label | .originalLatestStableSeen = $original[0].latest_stable_seen | .originalLatestPrereleaseSeen = $original[0].latest_prerelease_seen' build/release-metadata/current/build-info.json > build/release-metadata/synced-build-info.json
+          jq --arg morphe_channel "${{ steps.resolve.outputs.morphe_target_channel }}" --slurpfile original build/original.json '.morpheTargetChannel = $morphe_channel | .originalChannel = $original[0].channel | .originalLabel = $original[0].display_label | .originalLatestStableSeen = $original[0].latest_stable_seen | .originalLatestPrereleaseSeen = $original[0].latest_prerelease_seen' build/release-metadata/current/build-info.json > build/release-metadata/synced-build-info.json
           if ! cmp -s build/release-metadata/current/build-info.json build/release-metadata/synced-build-info.json; then
             cp build/release-metadata/synced-build-info.json build-info.json
             gh release upload "$RELEASE_TAG" build-info.json --clobber
@@ -249,7 +252,7 @@ jobs:
           if [[ "$PATCH_VERSION" == *-* ]]; then PATCH_LABEL="latest dev"; else PATCH_LABEL="latest release"; fi
           jq -n --slurpfile resolved build/resolved.json --slurpfile original build/original.json --arg sha256 "$SHA" --arg asset "${{ steps.resolve.outputs.asset_name }}" '{youtubeVersion: $resolved[0].youtube_version, patchesVersion: $resolved[0].patch_version, morpheTargetChannel: $resolved[0].morphe_target_channel, originalChannel: $original[0].channel, originalLabel: $original[0].display_label, originalLatestStableSeen: $original[0].latest_stable_seen, originalLatestPrereleaseSeen: $original[0].latest_prerelease_seen, asset: $asset, sha256: $sha256}' > build/build-info.json
           cat > build/release-notes.md <<EOF
-          **Youtube Version:** ${{ steps.resolve.outputs.youtube_version }} (latest release (Morphe) & ${{ steps.original.outputs.original_label }})
+          **Youtube Version:** ${{ steps.resolve.outputs.youtube_version }} (latest release (Morphe), ${{ steps.resolve.outputs.morphe_target_channel }} target & ${{ steps.original.outputs.original_label }})
 
           **Patches Version:** $PATCH_VERSION ($PATCH_LABEL)
 
