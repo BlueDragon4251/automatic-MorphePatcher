@@ -116,7 +116,7 @@ jobs:
           mkdir -p build/release-metadata/current
           gh release download "$RELEASE_TAG" --pattern build-info.json --dir build/release-metadata/current --clobber
           jq --arg morphe_channel "${{ steps.resolve.outputs.morphe_target_channel }}" --slurpfile original build/original.json '.morpheTargetChannel = $morphe_channel | .originalChannel = $original[0].channel | .originalLabel = $original[0].display_label | .originalLatestStableSeen = $original[0].latest_stable_seen | .originalLatestPrereleaseSeen = $original[0].latest_prerelease_seen' build/release-metadata/current/build-info.json > build/release-metadata/synced-build-info.json
-          if ! cmp -s build/release-metadata/current/build-info.json build/release-metadata/synced-build-info.json; then
+          if ! jq -e --slurpfile expected build/release-metadata/synced-build-info.json '. == $expected[0]' build/release-metadata/current/build-info.json >/dev/null; then
             cp build/release-metadata/synced-build-info.json build-info.json
             gh release upload "$RELEASE_TAG" build-info.json --clobber
             rm -f build-info.json
