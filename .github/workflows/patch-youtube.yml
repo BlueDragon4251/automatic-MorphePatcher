@@ -10,6 +10,9 @@ on:
     paths:
       - ".github/workflows/patch-youtube.yml"
       - "scripts/discord_notify.py"
+      - "scripts/resolve.py"
+      - "scripts/plan.py"
+      - "scripts/apkmirror.py"
   workflow_dispatch:
     inputs:
       force:
