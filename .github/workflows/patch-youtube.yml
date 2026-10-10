@@ -133,7 +133,7 @@ jobs:
           if (state.get("original_channel"), state.get("original_label")) != (original["channel"], original["display_label"]):
               state["original_channel"] = original["channel"]
               state["original_label"] = original["display_label"]
-              state_path.write_text(json.dumps(state, indent=2) + "\\n", encoding="utf-8")
+              state_path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
           PY
           if ! git diff --quiet -- state.json; then
             git config user.name "github-actions[bot]"
