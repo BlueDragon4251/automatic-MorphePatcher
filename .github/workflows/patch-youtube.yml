@@ -124,6 +124,25 @@ jobs:
             UPDATED=true
           fi
           echo "updated=$UPDATED" >> "$GITHUB_OUTPUT"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          state_path = Path("state.json")
+          state = json.loads(state_path.read_text(encoding="utf-8"))
+          original = json.loads(Path("build/original.json").read_text(encoding="utf-8"))
+          if (state.get("original_channel"), state.get("original_label")) != (original["channel"], original["display_label"]):
+              state["original_channel"] = original["channel"]
+              state["original_label"] = original["display_label"]
+              state_path.write_text(json.dumps(state, indent=2) + "\\n", encoding="utf-8")
+          PY
+          if ! git diff --quiet -- state.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add state.json
+            git commit -m "chore: sync Original YouTube channel metadata"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
 
       - name: Reconcile existing Discord message metadata
         if: steps.plan.outputs.needs_build != 'true' && steps.sync_release.outputs.release_tag != ''
