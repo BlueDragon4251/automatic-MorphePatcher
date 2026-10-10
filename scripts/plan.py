@@ -52,7 +52,8 @@ def main():
     # YouTube target, youtube_changed still triggers an immediate build.
     stable_patch_changed = (
         not current_patch_prerelease
-        and state.get("patch_version") != resolved["patch_version"]
+        and tuple(map(int, resolved["patch_version"].split("-")[0].split(".")))
+        > tuple(map(int, state.get("patch_version", "0.0.0").split("-")[0].split(".")))
     )
 
     build_reason = None
