@@ -118,6 +118,7 @@ def write_output(values: dict):
 
 def main():
     patch_release = latest_patch_release(PATCH_REPO)
+    stable_release = get_json(f"https://api.github.com/repos/{PATCH_REPO}/releases/latest")
     patch_tag = patch_release["tag_name"]
     patch_version = patch_tag.removeprefix("v")
     patch_prerelease = bool(patch_release.get("prerelease"))
@@ -146,6 +147,7 @@ def main():
 
     resolved = {
         "patch_repo": PATCH_REPO,
+        "latest_stable_patch_version": stable_release["tag_name"].removeprefix("v"),
         "patch_tag": patch_tag,
         "patch_version": patch_version,
         "patch_prerelease": patch_prerelease,
