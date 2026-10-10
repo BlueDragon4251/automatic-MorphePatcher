@@ -119,6 +119,20 @@ def write_output(values: dict):
 def main():
     patch_release = latest_patch_release(PATCH_REPO)
     stable_release = get_json(f"https://api.github.com/repos/{PATCH_REPO}/releases/latest")
+    # A newer stable bundle must not be hidden by a more recently published dev.
+    state_path = Path("state.json")
+    state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+    latest_tag = patch_release["tag_name"]
+    latest_readme = get_text(
+        f"https://raw.githubusercontent.com/{PATCH_REPO}/{urllib.parse.quote(latest_tag, safe='')}/README.md"
+    )
+    latest_target = parse_youtube_supported_versions(latest_readme)[0]["version"]
+    stable_version = stable_release["tag_name"].removeprefix("v")
+    previous_version = state.get("patch_version", "0.0.0").split("-")[0]
+    stable_is_newer = version_key(stable_version) > version_key(previous_version)
+    target_changed = latest_target != state.get("youtube_version")
+    if stable_is_newer and not target_changed:
+        patch_release = stable_release
     patch_tag = patch_release["tag_name"]
     patch_version = patch_tag.removeprefix("v")
     patch_prerelease = bool(patch_release.get("prerelease"))
