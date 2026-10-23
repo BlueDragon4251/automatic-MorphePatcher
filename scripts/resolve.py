@@ -129,9 +129,12 @@ def main():
     latest_target = parse_youtube_supported_versions(latest_readme)[0]["version"]
     stable_version = stable_release["tag_name"].removeprefix("v")
     previous_version = state.get("patch_version", "0.0.0").split("-")[0]
-    stable_is_newer = version_key(stable_version) > version_key(previous_version)
+    # A stable release with the same base version as a published dev build
+    # is a new stable promotion and must be selected. Prefer stable over
+    # later dev builds when no new YouTube target is introduced.
+    stable_is_current_or_newer = version_key(stable_version) >= version_key(previous_version)
     target_changed = latest_target != state.get("youtube_version")
-    if stable_is_newer and not target_changed:
+    if stable_is_current_or_newer and not target_changed:
         patch_release = stable_release
     patch_tag = patch_release["tag_name"]
     patch_version = patch_tag.removeprefix("v")

@@ -50,10 +50,15 @@ def main():
     # A stable Morphe patch release does: this covers dev -> release promotion as
     # well as stable hotfixes. If a dev release introduces a new supported
     # YouTube target, youtube_changed still triggers an immediate build.
+    previous_patch_version = state.get("patch_version", "0.0.0")
+    current_base = tuple(map(int, resolved["patch_version"].split("-")[0].split(".")))
+    previous_base = tuple(map(int, previous_patch_version.split("-")[0].split(".")))
     stable_patch_changed = (
         not current_patch_prerelease
-        and tuple(map(int, resolved["patch_version"].split("-")[0].split(".")))
-        > tuple(map(int, state.get("patch_version", "0.0.0").split("-")[0].split(".")))
+        and (
+            current_base > previous_base
+            or (current_base == previous_base and "-" in previous_patch_version)
+        )
     )
 
     build_reason = None
