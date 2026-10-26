@@ -105,4 +105,4 @@ def main():
 if __name__ == "__main__":
     main()
 
-# Trigger current-main evaluation after a stable Morphe extras release.
+# Re-evaluate stable TikTok v1.2.2 after verified Patcher 2.x CAPTCHA compatibility fixes.
