@@ -2,9 +2,9 @@
   "tiktok_version": "46.7.3",
   "patch_version": "1.2.2",
   "patch_tag": "v1.2.2",
-  "morphe_extra_patch_version": "1.48.0",
-  "morphe_extra_patch_tag": "v1.48.0",
+  "morphe_extra_patch_version": "2.0.0",
+  "morphe_extra_patch_tag": "v2.0.0",
   "original_channel": "stable",
-  "published_at": "2026-10-26T20:12:09.543453+00:00",
+  "published_at": "2026-10-30T16:50:42.779290+00:00",
   "release_tag": "tiktok-46.7.3-morphe-1.2.2"
 }
