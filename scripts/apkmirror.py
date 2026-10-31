@@ -26,8 +26,9 @@ def clean_text(soup_or_tag) -> str:
     return " ".join(soup_or_tag.stripped_strings)
 
 
-def release_url(version: str) -> str:
-    return f"{BASE}/apk/{RELEASE_SLUG}-{version.replace('.', '-')}-release/"
+def release_url(version: str, prerelease: str | None = None) -> str:
+    suffix = f"-{prerelease}" if prerelease else ""
+    return f"{BASE}/apk/{RELEASE_SLUG}-{version.replace('.', '-')}{suffix}-release/"
 
 
 def get_session():
@@ -65,7 +66,7 @@ def listing_versions(listing_html: str):
     text = html.unescape(clean_text(soup))
     entries = {}
     pattern = re.compile(
-        r"YouTube\s+(\d+\.\d+\.\d+)(?!-SECONDARY)(?:\s+(beta|alpha))?",
+        r"YouTube\s+(\d+\.\d+\.\d+)(?!-SECONDARY)(?:[-\s]+(beta|alpha))?",
         re.I,
     )
     for m in pattern.finditer(text):
@@ -78,8 +79,20 @@ def listing_versions(listing_html: str):
 
 
 def classify(session, version: str):
-    rel_url = release_url(version)
-    rel_html = get_html(session, rel_url, BASE + "/")
+    # APKMirror gives beta/alpha uploads distinct slugs. A version can be a
+    # new Morphe-supported target before a stable Original APK exists.
+    # Retry a prerelease slug only on a genuine 404, not network errors.
+    rel_html = None
+    for prerelease in (None, "beta", "alpha"):
+        rel_url = release_url(version, prerelease)
+        try:
+            rel_html = get_html(session, rel_url, BASE + "/")
+            break
+        except RuntimeError as exc:
+            if str(exc) != f"HTTP 404 for {rel_url}":
+                raise
+    if rel_html is None:
+        raise RuntimeError(f"No APKMirror stable/beta/alpha release found for YouTube {version}")
     channel = target_channel(rel_html, version)
 
     listing_html = get_html(session, APP_PAGE, BASE + "/")
