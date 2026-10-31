@@ -3,6 +3,8 @@
   "patch_version": "2.1.0-dev.1",
   "original_channel": "beta",
   "original_label": "pre-release (Original)",
-  "published_at": "2026-10-31T08:50:27.286225+00:00",
-  "release_tag": "youtube-21.44.523-morphe-2.1.0-dev.1"
+  "published_at": "2026-10-31T08:54:28.980033+00:00",
+  "release_tag": "youtube-21.44.523-morphe-2.1.0-dev.1",
+  "selected_patch_count": 114,
+  "applied_patch_count": 114
 }
