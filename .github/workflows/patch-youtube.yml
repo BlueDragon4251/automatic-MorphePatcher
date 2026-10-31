@@ -234,7 +234,21 @@ jobs:
           ACTUAL_PACKAGE="$($APKANALYZER manifest application-id build/youtube-original.apk)"
           ACTUAL_VERSION="$($APKANALYZER manifest version-name build/youtube-original.apk)"
           test "$ACTUAL_PACKAGE" = "com.google.android.youtube" || { echo "Unexpected package: $ACTUAL_PACKAGE"; exit 1; }
-          test "$ACTUAL_VERSION" = "${{ steps.resolve.outputs.youtube_version }}" || { echo "Unexpected version: $ACTUAL_VERSION"; exit 1; }
+          EXPECTED_VERSION="${{ steps.resolve.outputs.youtube_version }}"
+          ORIGINAL_CHANNEL="$(jq -r .channel build/original.json)"
+          if [ "$ACTUAL_VERSION" != "$EXPECTED_VERSION" ]; then
+            # APKMirror's beta/alpha APKs may include their channel in Android's
+            # versionName, while Morphe tracks the numerical supported target.
+            case "$ORIGINAL_CHANNEL" in
+              beta|alpha)
+                test "$ACTUAL_VERSION" = "$EXPECTED_VERSION-${ORIGINAL_CHANNEL^^}" || {
+                  echo "Unexpected $ORIGINAL_CHANNEL version: $ACTUAL_VERSION (expected $EXPECTED_VERSION)"
+                  exit 1
+                }
+                ;;
+              *) echo "Unexpected version: $ACTUAL_VERSION"; exit 1 ;;
+            esac
+          fi
 
       - name: Restore signing key
         if: steps.plan.outputs.needs_build == 'true'
