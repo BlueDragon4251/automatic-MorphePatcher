@@ -273,7 +273,22 @@ jobs:
         run: |
           set -euo pipefail
           OUT="dist/${{ steps.resolve.outputs.asset_name }}"
-          java -jar build/morphe-desktop.jar patch --patches build/patches.mpp --options-file build/full-patch-options.json --keystore build/morphe-signing.keystore --keystore-password "$MORPHE_KEYSTORE_PASSWORD" --keystore-entry-alias "$MORPHE_KEY_ALIAS" --keystore-entry-password "$MORPHE_KEYSTORE_PASSWORD" --verify-with-sdk --result-file build/patch-result.json --out "$OUT" build/youtube-original.apk
+          PATCH_FLAGS=()
+          ORIGINAL_CHANNEL="$(jq -r .channel build/original.json)"
+          if [ "$ORIGINAL_CHANNEL" = "beta" ] || [ "$ORIGINAL_CHANNEL" = "alpha" ]; then
+            # APKMirror can add -BETA/-ALPHA to versionName while Morphe
+            # declares support for the corresponding numerical target.
+            # The exact base version and original Google signature were
+            # already verified in the preceding step.
+            PATCH_FLAGS+=(--force)
+          fi
+          java -jar build/morphe-desktop.jar patch --patches build/patches.mpp --options-file build/full-patch-options.json "${PATCH_FLAGS[@]}" --keystore build/morphe-signing.keystore --keystore-password "$MORPHE_KEYSTORE_PASSWORD" --keystore-entry-alias "$MORPHE_KEY_ALIAS" --keystore-entry-password "$MORPHE_KEYSTORE_PASSWORD" --verify-with-sdk --result-file build/patch-result.json --out "$OUT" build/youtube-original.apk 2>&1 | tee build/morphe-patch.log
+          EXPECTED_PATCHES="$(jq '[.[] | (.patches // {}) | length] | add' build/full-patch-options.json)"
+          APPLIED_PATCHES="$(grep -c 'INFO: Applied:' build/morphe-patch.log || true)"
+          if [ "$APPLIED_PATCHES" -ne "$EXPECTED_PATCHES" ]; then
+            echo "Incomplete Morphe patch application: applied $APPLIED_PATCHES of $EXPECTED_PATCHES selected patches"
+            exit 1
+          fi
           test -s "$OUT"
           apksigner verify --verbose --print-certs "$OUT"
           sha256sum "$OUT" | tee build/patched.sha256
