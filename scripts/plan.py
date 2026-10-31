@@ -46,6 +46,21 @@ def main():
     current_patch_prerelease = bool(resolved.get("patch_prerelease"))
     youtube_changed = state.get("youtube_version") != resolved["youtube_version"]
 
+    # A release can exist and be signed yet contain only universal patches:
+    # an APK with a -BETA manifest suffix was previously built that way.
+    # Do not reuse a published APK unless the previous build attested that
+    # every selected patch was actually applied.
+    current_release_tracked = state.get("release_tag") == resolved["release_tag"]
+    selected_count = state.get("selected_patch_count")
+    applied_count = state.get("applied_patch_count")
+    patch_integrity_verified = (
+        isinstance(selected_count, int)
+        and not isinstance(selected_count, bool)
+        and selected_count > 0
+        and applied_count == selected_count
+    )
+    repair_unverified_patches = current_release_tracked and not patch_integrity_verified
+
     # Intermediate dev/prerelease bumps do not deserve a rebuild by themselves.
     # A stable Morphe patch release does: this covers dev -> release promotion as
     # well as stable hotfixes. If a dev release introduces a new supported
@@ -68,6 +83,8 @@ def main():
         build_reason = "youtube_version_changed"
     elif stable_patch_changed:
         build_reason = "stable_patch_changed"
+    elif repair_unverified_patches:
+        build_reason = "repair_unverified_patches"
 
     changed = build_reason is not None
 
@@ -86,7 +103,7 @@ def main():
 
     # Build only for one of the explicit reasons above. Force always rebuilds;
     # otherwise an already-published matching asset is reused.
-    needs_build = changed and (force or not asset_exists)
+    needs_build = changed and (force or not asset_exists or repair_unverified_patches)
     needs_notify = changed
 
     output({
@@ -97,6 +114,7 @@ def main():
         "asset_exists": asset_exists,
         "youtube_changed": youtube_changed,
         "stable_patch_changed": stable_patch_changed,
+        "repair_unverified_patches": repair_unverified_patches,
         "build_reason": build_reason or "none",
     })
     print(json.dumps({
@@ -110,6 +128,7 @@ def main():
         "force": force,
         "youtube_changed": youtube_changed,
         "stable_patch_changed": stable_patch_changed,
+        "repair_unverified_patches": repair_unverified_patches,
         "build_reason": build_reason,
         "changed": changed,
         "release_exists": release_exists,
