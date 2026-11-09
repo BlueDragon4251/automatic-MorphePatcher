@@ -1,10 +1,10 @@
 {
-  "youtube_version": "21.44.528",
-  "patch_version": "2.1.0",
+  "youtube_version": "21.45.82",
+  "patch_version": "2.2.0-dev.4",
   "original_channel": "stable",
   "original_label": "release (Original)",
-  "published_at": "2026-11-06T18:07:22.610506+00:00",
-  "release_tag": "youtube-21.44.528-morphe-2.1.0",
-  "selected_patch_count": 118,
-  "applied_patch_count": 118
+  "published_at": "2026-11-09T18:57:11.339753+00:00",
+  "release_tag": "youtube-21.45.82-morphe-2.2.0-dev.4",
+  "selected_patch_count": 119,
+  "applied_patch_count": 119
 }
