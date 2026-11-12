@@ -74,8 +74,9 @@ def find_asset(release, predicate, description: str) -> str:
 
 
 def parse_youtube_supported_versions(readme: str):
-    marker = "<summary>📦 YouTube"
-    start = readme.find(marker)
+    # Exclude YouTube Music even when upstream README sections change order.
+    marker = re.search(r"<summary>📦 YouTube(?=&nbsp;|</summary>)", readme)
+    start = marker.start() if marker else -1
     if start < 0:
         raise RuntimeError("YouTube section not found in Morphe README")
     end = readme.find("</details>", start)
