@@ -142,6 +142,35 @@ jobs:
           OUT="dist/${{ steps.resolve.outputs.asset_name }}"
           java -jar build/morphe-desktop.jar patch --patches build/tiktok-patches.mpp --patches build/morphe-extra-patches.mpp --options-file build/tiktok-full-patch-options.json --keystore build/morphe-signing.keystore --keystore-password "$MORPHE_KEYSTORE_PASSWORD" --keystore-entry-alias "$MORPHE_KEY_ALIAS" --keystore-entry-password "$MORPHE_KEYSTORE_PASSWORD" --result-file build/tiktok-patch-result.json --out "$OUT" build/tiktok-original.apk
           test -s "$OUT"
+      - name: Repair missing APK signatures with the existing release key
+        if: steps.plan.outputs.needs_build == 'true'
+        env:
+          MORPHE_KEYSTORE_PASSWORD: ${{ secrets.MORPHE_KEYSTORE_PASSWORD }}
+          MORPHE_KEY_ALIAS: ${{ secrets.MORPHE_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          APK="dist/${{ steps.resolve.outputs.asset_name }}"
+          # Morphe Desktop may save an APK without complete signing metadata.
+          # Preserve valid signatures; only re-sign when apksigner rejects them.
+          if apksigner verify --verbose "$APK" >/dev/null 2>&1; then
+            echo "Patched APK is already signed and verifiable."
+          else
+            echo "Patched APK signature verification failed; re-sign with the existing release key."
+            unzip -t "$APK" >/dev/null
+            zipalign -f -p 4 "$APK" build/tiktok-zipaligned.apk
+            apksigner sign \
+              --ks build/morphe-signing.keystore \
+              --ks-key-alias "$MORPHE_KEY_ALIAS" \
+              --ks-pass env:MORPHE_KEYSTORE_PASSWORD \
+              --key-pass env:MORPHE_KEYSTORE_PASSWORD \
+              --v1-signing-enabled true \
+              --v2-signing-enabled true \
+              --v3-signing-enabled true \
+              --out build/tiktok-resigned.apk build/tiktok-zipaligned.apk
+            mv build/tiktok-resigned.apk "$APK"
+            rm -f build/tiktok-zipaligned.apk
+            apksigner verify --verbose --print-certs "$APK"
+          fi
       - name: Verify patched TikTok APK
         if: steps.plan.outputs.needs_build == 'true'
         run: |
